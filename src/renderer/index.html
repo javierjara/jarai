@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- La Content-Security-Policy è applicata dal main process (src/main/index.ts),
+         non qui: in sviluppo deve essere più permissiva per l'HMR di Vite,
+         nel pacchetto finale è quella rigorosa di produzione. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>jarai.</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
