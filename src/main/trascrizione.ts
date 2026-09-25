@@ -46,7 +46,11 @@ function messaggioErroreTrascrizione(testoGrezzo: string): string {
   return 'Non sono riuscito a preparare la trascrizione audio: verifica di avere una connessione internet (serve solo la prima volta) e riprova.';
 }
 
-async function eseguiComando(comando: string, argomenti: string[]): Promise<{ codice: number | null; stdout: string; stderr: string }> {
+async function eseguiComando(
+  comando: string,
+  argomenti: string[],
+  onRigaStderr?: (riga: string) => void,
+): Promise<{ codice: number | null; stdout: string; stderr: string }> {
   // Stesso motivo di claudeLogin.ts: su Windows un'app avviata con un
   // doppio clic può ereditare un PATH più corto o più vecchio di quello
   // visto in un terminale aperto a mano — "python" può risultare non
@@ -58,8 +62,16 @@ async function eseguiComando(comando: string, argomenti: string[]): Promise<{ co
     const child = spawn(comando, argomenti, { shell: process.platform === 'win32', env: ambienteConPath(path) });
     let stdout = '';
     let stderr = '';
+    let rigaParziale = '';
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+    child.stderr.on('data', (chunk: Buffer) => {
+      const testo = chunk.toString();
+      stderr += testo;
+      if (!onRigaStderr) return;
+      const righe = (rigaParziale + testo).split(/\r?\n/);
+      rigaParziale = righe.pop() ?? '';
+      righe.forEach(onRigaStderr);
+    });
     child.on('error', (err) => reject(err));
     child.on('close', (codice) => resolve({ codice, stdout, stderr }));
   });
@@ -168,8 +180,33 @@ function chiaveCache(percorso: string, dimensione: number, modificatoIlMs: numbe
   return `${percorso}::${dimensione}::${modificatoIlMs}`;
 }
 
-async function eseguiScript(pythonVenv: string, percorsoAudio: string): Promise<string> {
-  const { codice, stdout, stderr } = await eseguiComando(pythonVenv, [SCRIPT_PATH(), percorsoAudio]);
+export interface AvanzamentoTrascrizione {
+  fase: 'in-coda' | 'preparazione' | 'modello' | 'trascrizione';
+  // 0..1, solo durante la fase "trascrizione".
+  progresso?: number;
+  durataSec?: number;
+}
+
+const PREFISSO_AVANZAMENTO = '@@JARAI ';
+
+async function eseguiScript(
+  pythonVenv: string,
+  percorsoAudio: string,
+  onAvanzamento: (a: AvanzamentoTrascrizione) => void,
+): Promise<string> {
+  let durataSec: number | undefined;
+  const { codice, stdout, stderr } = await eseguiComando(pythonVenv, [SCRIPT_PATH(), percorsoAudio], (riga) => {
+    if (!riga.startsWith(PREFISSO_AVANZAMENTO)) return;
+    try {
+      const dati = JSON.parse(riga.slice(PREFISSO_AVANZAMENTO.length)) as { fase?: string; durata?: number; progresso?: number };
+      if (dati.durata) durataSec = dati.durata;
+      if (dati.fase === 'modello') onAvanzamento({ fase: 'modello' });
+      else if (dati.fase === 'trascrizione') onAvanzamento({ fase: 'trascrizione', progresso: 0, durataSec });
+      else if (typeof dati.progresso === 'number') onAvanzamento({ fase: 'trascrizione', progresso: dati.progresso, durataSec });
+    } catch {
+      // Riga di avanzamento malformata: si ignora, la trascrizione continua.
+    }
+  });
   if (codice !== 0) {
     throw new Error(messaggioErroreTrascrizione(stderr));
   }
@@ -204,21 +241,45 @@ async function assicuraFileTrascrizione(cartellaPratica: string, nomeAudio: stri
   await fs.writeFile(percorsoFile, buffer);
 }
 
+// Una trascrizione alla volta: faster-whisper usa già tutti i core della
+// CPU, due in parallelo andrebbero ciascuna a metà velocità (e con il doppio
+// della memoria). Chi arriva dopo resta "in coda" e lo si mostra così.
+let codaTrascrizioni: Promise<unknown> = Promise.resolve();
+
+function inCoda<T>(lavoro: () => Promise<T>): Promise<T> {
+  const risultato = codaTrascrizioni.then(lavoro, lavoro);
+  codaTrascrizioni = risultato.catch(() => undefined);
+  return risultato;
+}
+
 // Un audio lungo (una deposizione, una telefonata intera) può richiedere
 // minuti reali di trascrizione: la cache su disco evita di rifare tutto il
 // lavoro se lo stesso file viene letto di nuovo in una conversazione futura
 // (il dedup in documentTools.ts copre solo la conversazione corrente).
-export async function trascriviAudio(percorso: string, cartellaPratica: string | null, nomeFile: string): Promise<string> {
+export async function trascriviAudio(
+  percorso: string,
+  cartellaPratica: string | null,
+  nomeFile: string,
+  onAvanzamento: (a: AvanzamentoTrascrizione) => void = () => undefined,
+): Promise<string> {
   const stat = await fs.stat(percorso);
   const chiave = chiaveCache(percorso, stat.size, stat.mtimeMs);
   const cache = await leggiCache();
   let testo = cache[chiave];
 
   if (testo === undefined) {
-    const pythonVenv = await assicuraAmbiente();
-    testo = await eseguiScript(pythonVenv, percorso);
-    cache[chiave] = testo;
-    await scriviCache(cache);
+    onAvanzamento({ fase: 'in-coda' });
+    testo = await inCoda(async () => {
+      onAvanzamento({ fase: 'preparazione' });
+      const pythonVenv = await assicuraAmbiente();
+      const trascritto = await eseguiScript(pythonVenv, percorso, onAvanzamento);
+      // Cache riletta qui, non quella letta prima dell'attesa in coda: nel
+      // frattempo un'altra trascrizione può averci scritto la sua voce.
+      const aggiornata = await leggiCache();
+      aggiornata[chiave] = trascritto;
+      await scriviCache(aggiornata);
+      return trascritto;
+    });
   }
 
   if (cartellaPratica) {

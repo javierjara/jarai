@@ -45,7 +45,21 @@ type EventoAgente =
   | { tipo: 'attivita'; conversazioneId: string; testo: string }
   | { tipo: 'completato'; conversazioneId: string; testo: string; costoUsd: number }
   | { tipo: 'errore'; conversazioneId: string; messaggio: string }
-  | { tipo: 'bozza'; conversazioneId: string; titolo: string; contenuto: string };
+  | { tipo: 'bozza'; conversazioneId: string; titolo: string; contenuto: string }
+  | { tipo: 'lavori'; conversazioneId: string; lavori: LavoroDocumento[] };
+
+// Stessa forma di LavoroDocumento in src/main/documentTools.ts.
+interface LavoroDocumento {
+  id: string;
+  nome: string;
+  tipo: 'trascrizione' | 'ocr';
+  fase: 'in-coda' | 'preparazione' | 'modello' | 'trascrizione' | 'ocr' | 'completato';
+  progresso?: number;
+  durataSec?: number;
+  iniziatoIl?: number;
+  pagina?: number;
+  pagineTotali?: number;
+}
 
 type EventoLogin =
   | { tipo: 'url'; url: string }

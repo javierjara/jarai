@@ -8,7 +8,7 @@ import WordExtractor from 'word-extractor';
 import MsgReader from '@kenjiuno/msgreader';
 import forge from 'node-forge';
 import Tesseract from 'tesseract.js';
-import { trascriviAudio } from './trascrizione';
+import { trascriviAudio, type AvanzamentoTrascrizione } from './trascrizione';
 import { CARTELLA_PRINCIPALE, ESTENSIONI_AUDIO, ESTENSIONI_IMMAGINE, ESTENSIONI_LEGGIBILI } from './formatiDocumenti';
 
 // Strumenti jarai-documenti (spec §6.2): solo lettura, scoperti per nome fra
@@ -21,6 +21,25 @@ export interface DocumentoRif {
   tipo: string;
   pagine?: number;
 }
+
+// Lavori lunghi in corso (trascrizioni audio, OCR di PDF scansionati),
+// mostrati all'avvocato uno per riga con il loro avanzamento: con più audio
+// nella stessa richiesta deve essere chiaro quale si sta trascrivendo e
+// quali aspettano il proprio turno.
+export interface LavoroDocumento {
+  id: string;
+  nome: string;
+  tipo: 'trascrizione' | 'ocr';
+  fase: AvanzamentoTrascrizione['fase'] | 'ocr' | 'completato';
+  progresso?: number;
+  durataSec?: number;
+  // Quando è partita la fase con il progresso: serve per stimare il tempo rimanente.
+  iniziatoIl?: number;
+  pagina?: number;
+  pagineTotali?: number;
+}
+
+type OnPaginaOcr = (pagina: number, totale: number) => void;
 
 const MAX_CARATTERI = 60_000;
 // Sotto questa soglia una pagina PDF si considera scansionata (a volte resta
@@ -74,7 +93,7 @@ function rtfATesto(buffer: Buffer): string {
     .trim();
 }
 
-async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile: string): Promise<string> {
+async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile: string, onPaginaOcr?: OnPaginaOcr): Promise<string> {
   const ext = estensione.toLowerCase();
 
   if (ext === 'pdf') {
@@ -100,7 +119,8 @@ async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile:
       const testoOcr = new Map<number, string>();
       if (daOcr.length > 0) {
         const schermate = await parser.getScreenshot({ partial: daOcr, scale: 2, imageBuffer: true, imageDataUrl: false });
-        for (const s of schermate.pages) {
+        for (const [indice, s] of schermate.pages.entries()) {
+          onPaginaOcr?.(indice + 1, schermate.pages.length);
           testoOcr.set(s.pageNumber, await ocrImmagine(Buffer.from(s.data)));
         }
       }
@@ -163,7 +183,7 @@ async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile:
     if (!estensioneInterna || !ESTENSIONI_LEGGIBILI.has(estensioneInterna) || estensioneInterna === 'p7m') {
       return '(Contenuto firmato estratto correttamente, ma il formato del documento originale non è tra quelli leggibili automaticamente.)';
     }
-    return estraiTestoDaBuffer(estratto, estensioneInterna, nomeInterno);
+    return estraiTestoDaBuffer(estratto, estensioneInterna, nomeInterno, onPaginaOcr);
   }
   throw new Error(`Il formato ${ext.toUpperCase()} non è ancora leggibile automaticamente.`);
 }
@@ -183,7 +203,11 @@ function radicePratica(doc: DocumentoRif): string | null {
   return radice;
 }
 
-async function estraiTesto(doc: DocumentoRif & { percorso: string }): Promise<string> {
+async function estraiTesto(
+  doc: DocumentoRif & { percorso: string },
+  onAvanzamento: (a: AvanzamentoTrascrizione) => void,
+  onPaginaOcr: OnPaginaOcr,
+): Promise<string> {
   const ext = extname(doc.nome).slice(1).toLowerCase();
 
   // L'audio lavora direttamente sul percorso su disco, non su un buffer in
@@ -192,20 +216,57 @@ async function estraiTesto(doc: DocumentoRif & { percorso: string }): Promise<st
   // informazioni del file reale (dimensione, data di modifica) per sapere
   // se un audio è già stato trascritto in passato.
   if (ESTENSIONI_AUDIO.has(ext)) {
-    const testo = await trascriviAudio(doc.percorso, radicePratica(doc), doc.nome);
+    const testo = await trascriviAudio(doc.percorso, radicePratica(doc), doc.nome, onAvanzamento);
     return testo || '(Non ho riconosciuto parlato in questo file audio.)';
   }
   const buffer = await fs.readFile(doc.percorso);
-  return estraiTestoDaBuffer(buffer, ext, doc.nome);
+  return estraiTestoDaBuffer(buffer, ext, doc.nome, onPaginaOcr);
 }
 
 // Dedup delle letture ripetute nella stessa conversazione (come in legis),
 // tenuto per conversazioneId così sopravvive ai turni successivi via resume.
 const lettiPerConversazione = new Map<string, Set<string>>();
 
-export function creaServerDocumenti(conversazioneId: string, documenti: DocumentoRif[]): McpSdkServerConfigWithInstance {
+export function creaServerDocumenti(
+  conversazioneId: string,
+  documenti: DocumentoRif[],
+  onLavori: (lavori: LavoroDocumento[]) => void = () => undefined,
+): McpSdkServerConfigWithInstance {
   if (!lettiPerConversazione.has(conversazioneId)) lettiPerConversazione.set(conversazioneId, new Set());
   const letti = lettiPerConversazione.get(conversazioneId)!;
+
+  const lavori = new Map<string, LavoroDocumento>();
+  // Il progresso della trascrizione arriva a ogni segmento (anche più volte
+  // al secondo): all'interfaccia basta un aggiornamento ogni tanto.
+  let ultimoInvio = 0;
+  const pubblica = (forza: boolean) => {
+    const ora = Date.now();
+    if (!forza && ora - ultimoInvio < 500) return;
+    ultimoInvio = ora;
+    onLavori([...lavori.values()]);
+  };
+  const aggiorna = (id: string, modifiche: Partial<LavoroDocumento> & Pick<LavoroDocumento, 'nome' | 'tipo' | 'fase'>) => {
+    const precedente = lavori.get(id);
+    const cambioFase = precedente?.fase !== modifiche.fase;
+    lavori.set(id, {
+      ...precedente,
+      ...modifiche,
+      id,
+      iniziatoIl: cambioFase ? Date.now() : precedente?.iniziatoIl,
+    });
+    pubblica(cambioFase);
+  };
+  // Una trascrizione finita resta nell'elenco (come "completata") per il
+  // resto del turno: se Claude legge gli audio uno dopo l'altro, l'avvocato
+  // vede comunque a che punto è ("2 di 3"). L'OCR invece sparisce e basta.
+  // Il server si ricrea a ogni messaggio, quindi l'elenco riparte da zero.
+  const concludi = (id: string, riuscito: boolean) => {
+    const lavoro = lavori.get(id);
+    if (!lavoro) return;
+    if (riuscito && lavoro.tipo === 'trascrizione') lavori.set(id, { ...lavoro, fase: 'completato', progresso: 1 });
+    else lavori.delete(id);
+    pubblica(true);
+  };
 
   const elencaDocumenti = tool(
     'elenca_documenti',
@@ -244,14 +305,24 @@ export function creaServerDocumenti(conversazioneId: string, documenti: Document
       if (letti.has(doc.percorso)) {
         return { content: [{ type: 'text' as const, text: `Hai già letto "${nome}" in questa conversazione: usa quanto hai già estratto.` }] };
       }
+      const id = doc.percorso;
+      let riuscito = false;
       try {
-        const testo = await estraiTesto(doc as DocumentoRif & { percorso: string });
+        const testo = await estraiTesto(
+          doc as DocumentoRif & { percorso: string },
+          (a) => aggiorna(id, { nome: doc.nome, tipo: 'trascrizione', fase: a.fase, progresso: a.progresso, durataSec: a.durataSec }),
+          (pagina, totale) =>
+            aggiorna(id, { nome: doc.nome, tipo: 'ocr', fase: 'ocr', pagina, pagineTotali: totale, progresso: (pagina - 1) / totale }),
+        );
         letti.add(doc.percorso);
+        riuscito = true;
         const troncato = testo.length > MAX_CARATTERI;
         const corpo = troncato ? `${testo.slice(0, MAX_CARATTERI)}\n\n[testo troncato per lunghezza]` : testo;
         return { content: [{ type: 'text' as const, text: corpo || '(il documento risulta vuoto o senza testo estraibile)' }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: err instanceof Error ? err.message : String(err) }], isError: true };
+      } finally {
+        concludi(id, riuscito);
       }
     },
   );

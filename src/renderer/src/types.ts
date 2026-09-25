@@ -63,6 +63,20 @@ export interface PassoPiano {
   stato: PassoStato;
 }
 
+// Lavoro lungo su un documento (trascrizione audio, OCR di un PDF
+// scansionato) — stessa forma di LavoroDocumento in src/main/documentTools.ts.
+export interface LavoroDocumento {
+  id: string;
+  nome: string;
+  tipo: 'trascrizione' | 'ocr';
+  fase: 'in-coda' | 'preparazione' | 'modello' | 'trascrizione' | 'ocr' | 'completato';
+  progresso?: number;
+  durataSec?: number;
+  iniziatoIl?: number;
+  pagina?: number;
+  pagineTotali?: number;
+}
+
 export interface Conversazione {
   id: string;
   praticaId: string;

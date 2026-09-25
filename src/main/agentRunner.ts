@@ -3,7 +3,7 @@ import type { WebContents } from 'electron';
 import { cartellaConfigurazioneClaude, leggiChiave, salvaStatoCollegamento } from './claudeAuth';
 import { percorsoClaudeIntegrato } from './claudeLogin';
 import { registraErroreGrezzo } from './logger';
-import { creaServerDocumenti, pulisciLettureConversazione, type DocumentoRif } from './documentTools';
+import { creaServerDocumenti, pulisciLettureConversazione, type DocumentoRif, type LavoroDocumento } from './documentTools';
 import { creaServerBozze, type EventoBozza } from './bozze';
 import { registraUso } from './usage';
 
@@ -69,7 +69,12 @@ interface EventoBozzaPronta {
   titolo: string;
   contenuto: string;
 }
-type EventoAgente = EventoDelta | EventoAttivita | EventoCompletato | EventoErrore | EventoBozzaPronta;
+interface EventoLavori {
+  tipo: 'lavori';
+  conversazioneId: string;
+  lavori: LavoroDocumento[];
+}
+type EventoAgente = EventoDelta | EventoAttivita | EventoCompletato | EventoErrore | EventoBozzaPronta | EventoLavori;
 
 // Traduzione delle attività (spec §5.5): il nome dello strumento non arriva
 // mai in chiaro all'avvocato, solo questa frase in italiano.
@@ -92,6 +97,7 @@ async function opzioniBase(
   conversazioneId: string,
   documenti: DocumentoRif[],
   onBozza: (bozza: EventoBozza) => void,
+  onLavori: (lavori: LavoroDocumento[]) => void,
 ): Promise<Options> {
   const chiave = await leggiChiave();
   const abort = new AbortController();
@@ -102,7 +108,7 @@ async function opzioniBase(
     systemPrompt: { type: 'preset', preset: 'claude_code', append: PROMPT_LEGALE },
     tools: [], // Nessuno strumento nativo (Bash/Write/Edit/...): solo i jarai-* sotto.
     mcpServers: {
-      'jarai-documenti': creaServerDocumenti(conversazioneId, documenti),
+      'jarai-documenti': creaServerDocumenti(conversazioneId, documenti, onLavori),
       'jarai-bozze': creaServerBozze(onBozza),
     },
     allowedTools: [
@@ -156,9 +162,13 @@ export async function inviaMessaggio(payload: InvioPayload, webContents: WebCont
 
   let testoCompleto = '';
   try {
-    const options = await opzioniBase(qualita, conversazioneId, documenti ?? [], (bozza) => {
-      invia({ tipo: 'bozza', conversazioneId, titolo: bozza.titolo, contenuto: bozza.contenuto });
-    });
+    const options = await opzioniBase(
+      qualita,
+      conversazioneId,
+      documenti ?? [],
+      (bozza) => invia({ tipo: 'bozza', conversazioneId, titolo: bozza.titolo, contenuto: bozza.contenuto }),
+      (lavori) => invia({ tipo: 'lavori', conversazioneId, lavori }),
+    );
     for await (const message of query({ prompt: testo, options })) {
       if (message.type === 'stream_event') {
         const event = message.event;

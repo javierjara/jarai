@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Bozza, Conversazione, Documento, Messaggio, Pratica, Procedura } from '../types';
+import type { Bozza, Conversazione, Documento, LavoroDocumento, Messaggio, Pratica, Procedura } from '../types';
 import { PROCEDURE } from '../types';
 import PlanPanel from './PlanPanel';
 import Markdown from './Markdown';
@@ -29,6 +29,7 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
   const [input, setInput] = useState('');
   const [elaborando, setElaborando] = useState(false);
   const [attivita, setAttivita] = useState<string | null>(conversazione?.attivitaCorrente ?? null);
+  const [lavori, setLavori] = useState<LavoroDocumento[]>([]);
   const [qualita, setQualita] = useState<'Standard' | 'Massima'>('Standard');
   const [confermaVisibile, setConfermaVisibile] = useState(conversazione?.stato === 'attesa');
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -57,6 +58,11 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
         return;
       }
 
+      if (evento.tipo === 'lavori') {
+        setLavori(evento.lavori);
+        return;
+      }
+
       if (evento.tipo === 'bozza') {
         bozzaInCorsoRef.current = { titolo: evento.titolo, contenuto: evento.contenuto };
         return;
@@ -76,6 +82,7 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
 
       setElaborando(false);
       setAttivita(null);
+      setLavori([]);
 
       if (evento.tipo === 'completato') {
         const bozza = bozzaInCorsoRef.current ?? undefined;
@@ -125,7 +132,7 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messaggi, attivita]);
+  }, [messaggi, attivita, lavori.length]);
 
   function invia() {
     const testo = input.trim();
@@ -200,7 +207,11 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
         ) : (
           messaggi.map((m) => <MessaggioBubble key={m.id} m={m} documenti={documentiPratica} onApriBozza={setBozzaAperta} />)
         )}
-        {attivita && <div className="artifact-processing">◌ {attivita}</div>}
+        {lavori.some((l) => l.fase !== 'completato') ? (
+          <LavoriInCorso lavori={lavori} />
+        ) : (
+          attivita && <div className="artifact-processing">◌ {attivita}</div>
+        )}
 
         {confermaVisibile && (
           <div className="msg msg-assistant">
@@ -352,6 +363,93 @@ function MessaggioBubble({ m, documenti, onApriBozza }: { m: Messaggio; document
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function durataLeggibile(secondi: number): string {
+  const minuti = Math.round(secondi / 60);
+  if (minuti < 1) return 'meno di un minuto';
+  if (minuti === 1) return '1 minuto';
+  if (minuti < 60) return `${minuti} minuti`;
+  const ore = Math.floor(minuti / 60);
+  const resto = minuti % 60;
+  return resto ? `${ore} h ${resto} min` : `${ore} h`;
+}
+
+// Stima dal ritmo tenuto finora; sotto il 5% è troppo presto per essere
+// credibile e si preferisce non dire nulla.
+function tempoRimanente(l: LavoroDocumento, ora: number): string | null {
+  if (!l.iniziatoIl || !l.progresso || l.progresso < 0.05) return null;
+  const trascorsi = (ora - l.iniziatoIl) / 1000;
+  const rimanenti = (trascorsi / l.progresso) * (1 - l.progresso);
+  return `circa ${durataLeggibile(rimanenti)} rimanenti`;
+}
+
+function descrizioneLavoro(l: LavoroDocumento, ora: number): string {
+  switch (l.fase) {
+    case 'completato':
+      return 'Trascritto ✓';
+    case 'in-coda':
+      return 'In attesa — parte appena finisce quello precedente';
+    case 'preparazione':
+      return 'Preparo la trascrizione…';
+    case 'modello':
+      return 'Carico il modello di trascrizione (la prima volta lo scarica: può richiedere qualche minuto)';
+    case 'ocr':
+      return `Riconoscimento del testo (OCR) — pagina ${l.pagina} di ${l.pagineTotali}`;
+    case 'trascrizione': {
+      const parti = [`Trascrizione ${Math.round((l.progresso ?? 0) * 100)}%`];
+      if (l.durataSec) parti.push(`audio di ${durataLeggibile(l.durataSec)}`);
+      const stima = tempoRimanente(l, ora);
+      if (stima) parti.push(stima);
+      return parti.join(' · ');
+    }
+  }
+}
+
+function LavoriInCorso({ lavori }: { lavori: LavoroDocumento[] }) {
+  // Ridisegno ogni secondo per tenere aggiornata la stima del tempo anche
+  // quando dal processo non arriva un nuovo avanzamento.
+  const [ora, setOra] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setOra(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const audio = lavori.filter((l) => l.tipo === 'trascrizione');
+  const fatti = audio.filter((l) => l.fase === 'completato').length;
+  const titolo =
+    audio.length > 1
+      ? `Trascrizione audio — ${fatti} di ${audio.length} completate (una alla volta)`
+      : audio.length === 1
+        ? 'Sto trascrivendo una registrazione audio'
+        : 'Sto leggendo un documento scansionato';
+
+  return (
+    <div className="lavori-card" role="status" aria-live="polite">
+      <div className="lavori-titolo">
+        <span className="lavori-spinner" aria-hidden />
+        {titolo}
+      </div>
+      {lavori.map((l) => {
+        const determinato = l.fase === 'trascrizione' || l.fase === 'ocr' || l.fase === 'completato';
+        return (
+          <div key={l.id} className={`lavoro ${l.fase === 'in-coda' ? 'lavoro-attesa' : ''} ${l.fase === 'completato' ? 'lavoro-fatto' : ''}`}>
+            <div className="lavoro-nome" title={l.nome}>{l.nome}</div>
+            <div className="lavoro-barra">
+              <div
+                className={determinato ? 'lavoro-barra-riempimento' : 'lavoro-barra-indeterminata'}
+                style={determinato ? { width: `${Math.max(2, (l.progresso ?? 0) * 100)}%` } : undefined}
+              />
+            </div>
+            <div className="lavoro-stato">{descrizioneLavoro(l, ora)}</div>
+          </div>
+        );
+      })}
+      {audio.length > 0 && (
+        <div className="lavori-nota">Le trascrizioni vengono salvate in «JarAI - Bozze»: la prossima volta saranno immediate.</div>
+      )}
     </div>
   );
 }
