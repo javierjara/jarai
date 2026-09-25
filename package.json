@@ -14,13 +14,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
-    "release:win": "npm run build && electron-builder --win --publish always"
+    "release:win": "npm run build && electron-builder --win --publish always",
+    "release:mac": "npm run build && electron-builder --mac --publish always"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.272",
     "@kenjiuno/msgreader": "^1.28.0",
     "docx": "^9.7.1",
     "dommatrix": "^1.0.3",
+    "electron-updater": "^6.8.9",
     "mammoth": "^1.12.3",
     "node-forge": "^1.4.0",
     "pdf-parse": "^2.4.5",

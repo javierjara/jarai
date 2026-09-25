@@ -6,6 +6,7 @@ import { registraCollegamentoClaude } from './claudeIpc';
 import { registraPersistenza } from './store';
 import { registraBozze } from './bozze';
 import { registraAudioSetup } from './audioSetup';
+import { registraAggiornamenti } from './aggiornamenti';
 
 const devServerUrl = process.env['ELECTRON_RENDERER_URL'];
 let mainWindow: BrowserWindow | null = null;
@@ -128,6 +129,7 @@ app.whenReady().then(() => {
   registraPersistenza();
   registraBozze(() => mainWindow);
   registraAudioSetup(() => mainWindow);
+  registraAggiornamenti(() => mainWindow);
 
   createWindow();
 

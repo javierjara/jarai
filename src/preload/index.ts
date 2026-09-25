@@ -74,6 +74,14 @@ interface RiepilogoUso {
   ultime: { ts: string; modello: string; costoUsd: number }[];
 }
 
+type EventoAggiornamento =
+  | { tipo: 'controllo' }
+  | { tipo: 'disponibile'; versione: string }
+  | { tipo: 'non-disponibile' }
+  | { tipo: 'progresso'; percentuale: number }
+  | { tipo: 'scaricato'; versione: string }
+  | { tipo: 'errore'; messaggio: string };
+
 interface FinestraUtilizzo {
   percentuale: number | null;
   siAzzeraIl: string | null;
@@ -147,6 +155,17 @@ const jarai = {
       const listener = (_event: Electron.IpcRendererEvent, fase: string) => callback(fase);
       ipcRenderer.on('audio:progresso', listener);
       return () => ipcRenderer.removeListener('audio:progresso', listener);
+    },
+  },
+
+  aggiornamenti: {
+    controlla: (): Promise<void> => ipcRenderer.invoke('aggiornamenti:controlla'),
+    scarica: (): Promise<void> => ipcRenderer.invoke('aggiornamenti:scarica'),
+    installa: (): Promise<void> => ipcRenderer.invoke('aggiornamenti:installa'),
+    onEvento: (callback: (evento: EventoAggiornamento) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, evento: EventoAggiornamento) => callback(evento);
+      ipcRenderer.on('aggiornamenti:evento', listener);
+      return () => ipcRenderer.removeListener('aggiornamenti:evento', listener);
     },
   },
 };

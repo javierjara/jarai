@@ -192,6 +192,52 @@ export default function Settings({ studio, onSalvaStudio }: Props) {
     }
   }
 
+  // Aggiornamenti (spec §12): un solo pulsante esplicito "Cerca
+  // aggiornamenti" — mai un controllo automatico all'avvio, stesso
+  // principio del resto di jarai. Il download è un passo a parte,
+  // altrettanto esplicito ("Scarica"), e "Riavvia e aggiorna" resta l'ultimo
+  // gesto dell'avvocato: l'app non si chiude mai da sola senza che sia lui a
+  // deciderlo.
+  type StatoAggiornamento = 'inattivo' | 'controllo' | 'aggiornato' | 'disponibile' | 'scaricando' | 'pronto' | 'errore';
+  const [statoAgg, setStatoAgg] = useState<StatoAggiornamento>('inattivo');
+  const [versioneNuova, setVersioneNuova] = useState<string | null>(null);
+  const [percentualeAgg, setPercentualeAgg] = useState(0);
+  const [erroreAgg, setErroreAgg] = useState<string | null>(null);
+
+  useEffect(() => {
+    return window.jarai.aggiornamenti.onEvento((evento) => {
+      if (evento.tipo === 'controllo') {
+        setStatoAgg('controllo');
+        setErroreAgg(null);
+      } else if (evento.tipo === 'disponibile') {
+        setStatoAgg('disponibile');
+        setVersioneNuova(evento.versione);
+      } else if (evento.tipo === 'non-disponibile') {
+        setStatoAgg('aggiornato');
+      } else if (evento.tipo === 'progresso') {
+        setStatoAgg('scaricando');
+        setPercentualeAgg(evento.percentuale);
+      } else if (evento.tipo === 'scaricato') {
+        setStatoAgg('pronto');
+        setVersioneNuova(evento.versione);
+      } else if (evento.tipo === 'errore') {
+        setStatoAgg('errore');
+        setErroreAgg(evento.messaggio);
+      }
+    });
+  }, []);
+
+  function controllaAggiornamenti() {
+    setStatoAgg('controllo');
+    setErroreAgg(null);
+    void window.jarai.aggiornamenti.controlla();
+  }
+
+  function scaricaAggiornamento() {
+    setPercentualeAgg(0);
+    void window.jarai.aggiornamenti.scarica();
+  }
+
   return (
     <div className="content">
       <div className="content-inner">
@@ -427,6 +473,81 @@ export default function Settings({ studio, onSalvaStudio }: Props) {
                     Scarica un componente aggiuntivo (una sola volta, serve una connessione internet) dentro i dati dell'app — non
                     installa nulla sul resto del computer.
                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Aggiornamenti */}
+          <div className="s-card">
+            <div className="s-card-head">
+              <div className="s-card-title">Aggiornamenti</div>
+              <div className="s-card-sub">Versione installata: {window.jarai.version}</div>
+            </div>
+            <div className="s-card-body">
+              <div className="s-row">
+                <div>
+                  <div className="s-label">jarai</div>
+                  <div className="s-label-sub">
+                    {statoAgg === 'disponibile' || statoAgg === 'scaricando' || statoAgg === 'pronto'
+                      ? `versione ${versioneNuova}`
+                      : 'controllo manuale, mai automatico'}
+                  </div>
+                </div>
+                <div className="api-key-row">
+                  <span
+                    className="dot"
+                    style={{
+                      background:
+                        statoAgg === 'errore'
+                          ? 'var(--oxblood)'
+                          : statoAgg === 'aggiornato' || statoAgg === 'pronto'
+                            ? 'var(--sage)'
+                            : 'var(--amber)',
+                    }}
+                  />
+                  <span className="v">
+                    {statoAgg === 'inattivo' && 'Non ancora verificato'}
+                    {statoAgg === 'controllo' && 'Verifica in corso…'}
+                    {statoAgg === 'aggiornato' && 'Sei già aggiornato'}
+                    {statoAgg === 'disponibile' && 'Nuova versione disponibile'}
+                    {statoAgg === 'scaricando' && `Download… ${Math.round(percentualeAgg)}%`}
+                    {statoAgg === 'pronto' && 'Pronta da installare'}
+                    {statoAgg === 'errore' && 'Non riuscito'}
+                  </span>
+                </div>
+                <div>
+                  {(statoAgg === 'inattivo' || statoAgg === 'aggiornato' || statoAgg === 'errore') && (
+                    <button className="btn" onClick={controllaAggiornamenti}>
+                      Cerca aggiornamenti
+                    </button>
+                  )}
+                  {statoAgg === 'controllo' && (
+                    <button className="btn" disabled>
+                      Verifica…
+                    </button>
+                  )}
+                  {statoAgg === 'disponibile' && (
+                    <button className="btn primary" onClick={scaricaAggiornamento}>
+                      Scarica
+                    </button>
+                  )}
+                  {statoAgg === 'scaricando' && (
+                    <button className="btn" disabled>
+                      Download…
+                    </button>
+                  )}
+                  {statoAgg === 'pronto' && (
+                    <button className="btn primary" onClick={() => void window.jarai.aggiornamenti.installa()}>
+                      Riavvia e aggiorna
+                    </button>
+                  )}
+                </div>
+              </div>
+              {erroreAgg && (
+                <div className="s-row">
+                  <div />
+                  <div style={{ fontSize: 12.5, color: 'var(--oxblood)' }}>{erroreAgg}</div>
                 </div>
               )}
             </div>

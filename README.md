@@ -125,6 +125,45 @@ incolla una chiave API Anthropic (`sk-ant-…`) e Salva, **oppure** "Accedi
 con l'account" per il login ufficiale guidato. Ogni verifica e ogni
 messaggio inviato è una vera richiesta a Claude (costo reale, minimo).
 
+## Rilasciare una nuova versione
+
+Gli aggiornamenti si distribuiscono via GitHub Releases, su un repo
+**separato** da questo (solo installer, niente codice sorgente):
+[`javierjara/jarai-releases`](https://github.com/javierjara/jarai-releases)
+(pubblico — deve esserlo, altrimenti `electron-updater` dentro l'app
+avrebbe bisogno di un token per scaricare, cosa che non vogliamo
+incorporare in un'app distribuita). La sezione `build.publish` di
+`package.json` punta già lì.
+
+1. **Alza la versione** in `package.json` (`"version"`) — `electron-builder`
+   usa questo numero per il tag della release e per il confronto che fa
+   `electron-updater` dentro l'app (spec §12, `src/main/aggiornamenti.ts`).
+2. **Genera un token GitHub** (una volta sola, poi scade e va rifatto):
+   [github.com/settings/tokens](https://github.com/settings/tokens) →
+   fine-grained → repository access solo su `jarai-releases` → permesso
+   "Contents: Read and write". Non va mai incollato in chat né committato.
+3. **Pubblica**:
+   ```bash
+   export GH_TOKEN=il_tuo_token
+   npm run release:win   # Windows — genera anche release:mac per macOS
+   ```
+   Questo builda e carica su `jarai-releases` l'installer, il `.blockmap`
+   e il manifest (`latest.yml` / `latest-mac.yml`) che `electron-updater`
+   legge per sapere se c'è una versione più recente.
+4. **La release nasce in bozza (Draft)** — apri
+   [i Releases](https://github.com/javierjara/jarai-releases/releases),
+   controlla che gli allegati ci siano tutti, poi "Edit" → "Publish
+   release". Finché resta Draft, `electron-updater` non la vede (l'API di
+   GitHub la esclude di proposito).
+5. Da quel momento, chi ha l'app installata la trova da **Impostazioni →
+   Aggiornamenti → "Cerca aggiornamenti"** — mai un controllo automatico
+   all'avvio, sempre un gesto esplicito dell'avvocato (stesso principio di
+   ogni altra azione di jarai).
+
+Per aggiungere anche gli asset macOS alla stessa release (stesso numero di
+versione): `npm run release:mac` — electron-builder li accoda a quella già
+esistente invece di crearne una nuova.
+
 ## Prossimi passi (spec §12)
 
 1. **Pratiche reali** — resta l'OCR delle pagine scansionate nei PDF (oggi
