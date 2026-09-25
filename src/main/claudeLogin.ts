@@ -31,9 +31,21 @@ export function percorsoClaudeIntegrato(): string | null {
   const nomePacchetto = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
   const nomeFile = process.platform === 'win32' ? 'claude.exe' : 'claude';
 
-  const candidati = app.isPackaged
-    ? [join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', nomePacchetto, nomeFile)]
-    : [join(app.getAppPath(), 'node_modules', nomePacchetto, nomeFile)];
+  // npm mette il pacchetto della piattaforma in due posti diversi a seconda
+  // di come lo risolve: in cima a node_modules se è una dipendenza diretta
+  // di JarAI (caso di claude-agent-sdk-win32-x64, aggiunta a mano nel nostro
+  // package.json), oppure annidato dentro node_modules del pacchetto
+  // "claude-agent-sdk" stesso se è solo una sua optionalDependency risolta
+  // per la piattaforma corrente (caso di norma per quella della piattaforma
+  // su cui giri, es. darwin-arm64 su questo Mac). Vanno controllati entrambi.
+  const basi = app.isPackaged
+    ? [join(process.resourcesPath, 'app.asar.unpacked', 'node_modules')]
+    : [join(app.getAppPath(), 'node_modules')];
+
+  const candidati = basi.flatMap((base) => [
+    join(base, nomePacchetto, nomeFile),
+    join(base, '@anthropic-ai', 'claude-agent-sdk', 'node_modules', nomePacchetto, nomeFile),
+  ]);
 
   for (const candidato of candidati) {
     if (existsSync(candidato)) return candidato;

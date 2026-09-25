@@ -1,4 +1,4 @@
-# jarai.
+# jarai
 
 L'assistente legale di Claude Code per lo studio — senza mai mostrare codice.
 Specifica completa: [`../JarAI-Spec.md`](../JarAI-Spec.md).
@@ -16,7 +16,7 @@ i documenti della pratica selezionata. Vedi spec §12 per il piano completo.
 
 Cosa c'è:
 
-- Sidebar con marchio `jarai.`, elenco pratiche e conversazioni, navigazione.
+- Sidebar con marchio `jarai`, elenco pratiche e conversazioni, navigazione.
 - **Fai una domanda** — conversazione reale con Claude (`@anthropic-ai/claude-agent-sdk`),
   streaming del testo, piano di lavoro, fonti citate, richiesta di conferma
   inline. **Quando una pratica è selezionata, Claude può leggere davvero i

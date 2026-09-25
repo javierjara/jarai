@@ -23,6 +23,10 @@ export interface DocumentoRif {
 }
 
 const MAX_CARATTERI = 60_000;
+// Sotto questa soglia una pagina PDF si considera scansionata (a volte resta
+// solo un timbro o un numero di pagina come testo vero).
+const MIN_CARATTERI_PAGINA = 20;
+const MAX_PAGINE_OCR = 30;
 
 // Tesseract scarica i modelli lingua al primo uso (rete richiesta una sola
 // volta, poi restano in cache qui) — senza `cachePath` esplicito scrive nella
@@ -86,11 +90,35 @@ async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile:
     const parser = new PDFParse({ data: buffer });
     try {
       const risultato = await parser.getText();
-      const testo = risultato.pages.map((p) => `[Pagina ${p.num}]\n${p.text}`).join('\n\n');
-      if (testo.trim().length === 0) {
-        return '(Questo PDF sembra una scansione senza testo estratto: la lettura OCR delle pagine scansionate non è ancora disponibile per i PDF, solo per le immagini importate singolarmente.)';
+      // Pagine scansionate (nessun layer di testo): le rasterizziamo e le
+      // passiamo a Tesseract. Tetto al numero di pagine perché l'OCR costa
+      // qualche secondo a pagina e un fascicolo scansionato può averne centinaia.
+      const daOcr = risultato.pages
+        .filter((p) => p.text.trim().length < MIN_CARATTERI_PAGINA)
+        .map((p) => p.num)
+        .slice(0, MAX_PAGINE_OCR);
+      const testoOcr = new Map<number, string>();
+      if (daOcr.length > 0) {
+        const schermate = await parser.getScreenshot({ partial: daOcr, scale: 2, imageBuffer: true, imageDataUrl: false });
+        for (const s of schermate.pages) {
+          testoOcr.set(s.pageNumber, await ocrImmagine(Buffer.from(s.data)));
+        }
       }
-      return testo;
+      const pagineScansionate = risultato.pages.filter((p) => p.text.trim().length < MIN_CARATTERI_PAGINA).length;
+      const testo = risultato.pages
+        .map((p) => {
+          const ocr = testoOcr.get(p.num);
+          return ocr !== undefined ? `[Pagina ${p.num} — testo da OCR]\n${ocr}` : `[Pagina ${p.num}]\n${p.text}`;
+        })
+        .join('\n\n');
+      const avviso =
+        pagineScansionate > daOcr.length
+          ? `\n\n(OCR eseguito solo sulle prime ${MAX_PAGINE_OCR} pagine scansionate su ${pagineScansionate}.)`
+          : '';
+      if (testo.replace(/\[Pagina[^\]]*\]/g, '').trim().length === 0) {
+        return '(Questo PDF sembra una scansione, ma l\'OCR non ha riconosciuto testo leggibile.)';
+      }
+      return testo + avviso;
     } finally {
       await parser.destroy();
     }
@@ -197,7 +225,7 @@ export function creaServerDocumenti(conversazioneId: string, documenti: Document
 
   const leggiDocumento = tool(
     'leggi_documento',
-    'Legge il testo di un documento della pratica, dato il suo nome esatto come mostrato da elenca_documenti. Il testo dei PDF è diviso per pagina. Per i file audio (telefonate, deposizioni registrate) restituisce la trascrizione — può richiedere qualche minuto per registrazioni lunghe.',
+    'Legge il testo di un documento della pratica, dato il suo nome esatto come mostrato da elenca_documenti. Il testo dei PDF è diviso per pagina; le pagine scansionate vengono lette con OCR (può richiedere qualche secondo a pagina). Per i file audio (telefonate, deposizioni registrate) restituisce la trascrizione — può richiedere qualche minuto per registrazioni lunghe.',
     { nome: z.string().describe('Nome esatto del file, incluso il caso, come mostrato da elenca_documenti') },
     async ({ nome }) => {
       const doc = documenti.find((d) => d.nome === nome);

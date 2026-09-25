@@ -38,7 +38,7 @@ function createWindow(): void {
     minWidth: 1040,
     minHeight: 640,
     show: false,
-    title: 'jarai.',
+    title: 'jarai',
     backgroundColor: '#f8f7f4',
     icon: appIconPath,
     webPreferences: {

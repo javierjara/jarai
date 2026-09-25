@@ -1,6 +1,6 @@
 {
   "name": "jarai",
-  "productName": "jarai.",
+  "productName": "jarai",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -47,7 +47,7 @@
   },
   "build": {
     "appId": "com.jarai.app",
-    "productName": "jarai.",
+    "productName": "jarai",
     "directories": {
       "output": "release"
     },
@@ -55,7 +55,7 @@
       "out/**/*"
     ],
     "asarUnpack": [
-      "node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+      "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
       "**/node_modules/@napi-rs/canvas-*/**"
     ],
     "extraResources": [
@@ -84,7 +84,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "jarai."
+      "shortcutName": "jarai"
     },
     "mac": {
       "target": [

@@ -238,6 +238,7 @@ export async function leggiUtilizzoAbbonamento(): Promise<UtilizzoAbbonamento | 
         tools: [],
         settingSources: [],
         maxTurns: 1,
+        pathToClaudeCodeExecutable: percorsoClaudeIntegrato() ?? undefined,
         env: {
           ...process.env,
           CLAUDE_CONFIG_DIR: cartellaConfigurazioneClaude(),
@@ -286,6 +287,10 @@ async function eseguiVerifica(): Promise<EsitoVerifica> {
       tools: [],
       settingSources: [],
       maxTurns: 1,
+      // Stesso motivo di opzioniBase() sopra: senza questo l'SDK cerca da
+      // solo l'eseguibile di Claude Code con una risoluzione inaffidabile
+      // dentro l'app impacchettata.
+      pathToClaudeCodeExecutable: percorsoClaudeIntegrato() ?? undefined,
       env: {
         ...process.env,
         CLAUDE_CONFIG_DIR: cartellaConfigurazioneClaude(),
