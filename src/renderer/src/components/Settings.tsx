@@ -150,6 +150,48 @@ export default function Settings({ studio, onSalvaStudio }: Props) {
     setUsoAbbonamentoCaricando(false);
   }
 
+  // Trascrizione audio (spec §12): la trascrizione vera e propria richiede
+  // Python 3 sul computer (trascrizione.ts, pythonRuntime.ts) — qui si vede
+  // solo "attiva o no", mai il dettaglio (Python di sistema o quello privato
+  // scaricato da questo pulsante), stesso principio del collegamento Claude.
+  const [audioDisponibile, setAudioDisponibile] = useState<boolean | null>(null);
+  const [installazioneAutoDisponibile, setInstallazioneAutoDisponibile] = useState(false);
+  const [installandoAudio, setInstallandoAudio] = useState(false);
+  const [faseAudio, setFaseAudio] = useState<string | null>(null);
+  const [erroreAudio, setErroreAudio] = useState<string | null>(null);
+
+  const FASI_AUDIO: Record<string, string> = {
+    'download-python': 'Scaricamento di Python…',
+    estrazione: 'Preparazione…',
+    'download-pip': 'Scaricamento componenti…',
+    'installazione-pip': 'Installazione…',
+  };
+
+  async function caricaStatoAudio() {
+    const stato = await window.jarai.audio.stato();
+    setAudioDisponibile(stato.disponibile);
+    setInstallazioneAutoDisponibile(stato.installazioneAutomaticaDisponibile);
+  }
+
+  useEffect(() => {
+    void caricaStatoAudio();
+    return window.jarai.audio.onProgresso((fase) => setFaseAudio(fase));
+  }, []);
+
+  async function attivaTrascrizioneAudio() {
+    setInstallandoAudio(true);
+    setErroreAudio(null);
+    setFaseAudio(null);
+    const esito = await window.jarai.audio.installa();
+    setInstallandoAudio(false);
+    setFaseAudio(null);
+    if (esito.ok) {
+      await caricaStatoAudio();
+    } else {
+      setErroreAudio(esito.errore);
+    }
+  }
+
   return (
     <div className="content">
       <div className="content-inner">
@@ -330,6 +372,62 @@ export default function Settings({ studio, onSalvaStudio }: Props) {
                   {usoAbbonamento.settimana && <FinestraUtilizzoRow etichetta="Questa settimana (tutti i modelli)" finestra={usoAbbonamento.settimana} />}
                   {usoAbbonamento.settimanaOpus && <FinestraUtilizzoRow etichetta="Questa settimana (Opus)" finestra={usoAbbonamento.settimanaOpus} />}
                 </>
+              )}
+            </div>
+          </div>
+
+          {/* Trascrizione audio */}
+          <div className="s-card">
+            <div className="s-card-head">
+              <div className="s-card-title">Trascrizione audio</div>
+              <div className="s-card-sub">Per leggere telefonate e deposizioni registrate come documenti della pratica.</div>
+            </div>
+            <div className="s-card-body">
+              <div className="s-row">
+                <div>
+                  <div className="s-label">Componente audio</div>
+                  <div className="s-label-sub">
+                    {audioDisponibile === null ? 'verifica…' : 'richiede Python 3, una sola volta'}
+                  </div>
+                </div>
+                <div className="api-key-row">
+                  <span
+                    className="dot"
+                    style={{
+                      background: audioDisponibile === null ? 'var(--amber)' : audioDisponibile ? 'var(--sage)' : 'var(--oxblood)',
+                    }}
+                  />
+                  <span className="v">
+                    {audioDisponibile === null && 'Verifica in corso…'}
+                    {audioDisponibile === true && 'Attiva'}
+                    {audioDisponibile === false && 'Non attiva'}
+                  </span>
+                </div>
+                <div>
+                  {audioDisponibile === false &&
+                    (installazioneAutoDisponibile ? (
+                      <button className="btn primary" onClick={attivaTrascrizioneAudio} disabled={installandoAudio}>
+                        {installandoAudio ? (faseAudio ? FASI_AUDIO[faseAudio] ?? 'Installazione…' : 'Installazione…') : 'Attiva trascrizione audio'}
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>Chiedi al tuo tecnico di installare Python 3</span>
+                    ))}
+                </div>
+              </div>
+              {erroreAudio && (
+                <div className="s-row">
+                  <div />
+                  <div style={{ fontSize: 12.5, color: 'var(--oxblood)' }}>{erroreAudio}</div>
+                </div>
+              )}
+              {audioDisponibile === false && installazioneAutoDisponibile && !erroreAudio && (
+                <div className="s-row">
+                  <div />
+                  <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                    Scarica un componente aggiuntivo (una sola volta, serve una connessione internet) dentro i dati dell'app — non
+                    installa nulla sul resto del computer.
+                  </div>
+                </div>
               )}
             </div>
           </div>

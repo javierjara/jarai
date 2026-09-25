@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { generaDocxBuffer } from './bozze';
 import { ambienteConPath, pathCompletoWindows } from './pathSistema';
+import { eseguibilePythonAttivo } from './pythonRuntime';
 
 // Trascrizione audio (spec §6.2, Fase 3): un processo Python esterno con
 // faster-whisper, sullo stesso schema del CLI "claude" già usato per il
@@ -30,16 +31,14 @@ const SCRIPT_PATH = () =>
     : join(app.getAppPath(), 'resources', 'trascrivi.py');
 const CACHE_PATH = () => join(app.getPath('userData'), 'audio-trascrizioni-cache.json');
 const AMBIENTE_DIR = () => join(app.getPath('userData'), 'python-audio-env');
-// Il comando di sistema e il percorso dentro la venv differiscono su
-// Windows (python.org installa "python", non "python3"; la venv mette
-// l'eseguibile in "Scripts\python.exe", non "bin/python3").
-const PYTHON_SISTEMA = process.platform === 'win32' ? 'python' : 'python3';
+// Il percorso dentro la venv differisce su Windows (l'eseguibile sta in
+// "Scripts\python.exe", non "bin/python3").
 const PYTHON_VENV = () =>
   process.platform === 'win32' ? join(AMBIENTE_DIR(), 'Scripts', 'python.exe') : join(AMBIENTE_DIR(), 'bin', 'python3');
 
 function messaggioErroreTrascrizione(testoGrezzo: string): string {
   if (/enoent|not found|command not found/i.test(testoGrezzo)) {
-    return 'Serve Python 3 installato su questo computer per trascrivere gli audio — chiedi al tuo tecnico di installarlo, poi riprova.';
+    return 'Serve Python 3 su questo computer per trascrivere gli audio — su Windows puoi installarlo da Impostazioni → Trascrizione audio, altrimenti chiedi al tuo tecnico.';
   }
   if (/permission denied/i.test(testoGrezzo)) {
     return 'Non riesco a preparare l\'ambiente per la trascrizione (permessi del sistema). Contatta il tuo tecnico.';
@@ -94,11 +93,41 @@ function assicuraAmbiente(): Promise<string> {
   return ambientePronto;
 }
 
+async function pacchettoInstallato(python: string, nomeModulo: string): Promise<boolean> {
+  const { codice } = await eseguiComando(python, ['-c', `import ${nomeModulo}`]).catch(() => ({ codice: 1 }));
+  return codice === 0;
+}
+
 async function creaAmbiente(): Promise<string> {
+  const attivo = await eseguibilePythonAttivo();
+  if (!attivo) {
+    throw new Error(messaggioErroreTrascrizione('not found'));
+  }
+
+  // Python privato (scaricato da Impostazioni → Trascrizione audio, spec
+  // §12): è già un ambiente isolato tutto suo, mai quello di sistema — a
+  // differenza del caso sotto non serve un'altra venv sopra, faster-whisper
+  // si installa direttamente lì.
+  if (attivo.privato) {
+    if (await pacchettoInstallato(attivo.percorso, 'faster_whisper')) return attivo.percorso;
+    const pip = await eseguiComando(attivo.percorso, [
+      '-m',
+      'pip',
+      'install',
+      '--quiet',
+      '--disable-pip-version-check',
+      'faster-whisper',
+    ]).catch((err) => {
+      throw new Error(messaggioErroreTrascrizione(err.message));
+    });
+    if (pip.codice !== 0) throw new Error(messaggioErroreTrascrizione(pip.stderr || `uscita ${pip.codice}`));
+    return attivo.percorso;
+  }
+
   const pythonVenv = PYTHON_VENV();
   if (await esiste(pythonVenv)) return pythonVenv;
 
-  const venv = await eseguiComando(PYTHON_SISTEMA, ['-m', 'venv', AMBIENTE_DIR()]).catch((err) => {
+  const venv = await eseguiComando(attivo.percorso, ['-m', 'venv', AMBIENTE_DIR()]).catch((err) => {
     throw new Error(messaggioErroreTrascrizione(err.message));
   });
   if (venv.codice !== 0) {

@@ -5,6 +5,7 @@ import { registraGestionePratiche } from './pratiche';
 import { registraCollegamentoClaude } from './claudeIpc';
 import { registraPersistenza } from './store';
 import { registraBozze } from './bozze';
+import { registraAudioSetup } from './audioSetup';
 
 const devServerUrl = process.env['ELECTRON_RENDERER_URL'];
 let mainWindow: BrowserWindow | null = null;
@@ -126,6 +127,7 @@ app.whenReady().then(() => {
   registraCollegamentoClaude(() => mainWindow);
   registraPersistenza();
   registraBozze(() => mainWindow);
+  registraAudioSetup(() => mainWindow);
 
   createWindow();
 

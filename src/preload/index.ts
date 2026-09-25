@@ -124,6 +124,17 @@ const jarai = {
     salvaDocx: (titolo: string, contenuto: string): Promise<{ salvato: boolean; percorso?: string }> =>
       ipcRenderer.invoke('bozze:salva-docx', { titolo, contenuto }),
   },
+
+  audio: {
+    stato: (): Promise<{ disponibile: boolean; installazioneAutomaticaDisponibile: boolean }> =>
+      ipcRenderer.invoke('audio:stato'),
+    installa: (): Promise<{ ok: true } | { ok: false; errore: string }> => ipcRenderer.invoke('audio:installa'),
+    onProgresso: (callback: (fase: string) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, fase: string) => callback(fase);
+      ipcRenderer.on('audio:progresso', listener);
+      return () => ipcRenderer.removeListener('audio:progresso', listener);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld('jarai', jarai);
