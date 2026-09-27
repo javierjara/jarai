@@ -140,7 +140,12 @@ function conParzialeEventuale(parziale: string, messaggioErrore: string): string
 function messaggioErroreItaliano(err: unknown): string {
   const testo = err instanceof Error ? err.message : String(err);
   if (/native cli binary|enoent|not found/i.test(testo)) {
-    return 'Serve un componente aggiuntivo: installa Claude Code per collegare JarAI.';
+    // Con il claude.exe incluso in JarAI presente, l'errore non dipende da
+    // un'installazione a parte: dire "installa Claude Code" a chi l'ha già
+    // installato manda fuori strada. Senza, è l'app a essere incompleta.
+    return percorsoClaudeIntegrato()
+      ? 'Non riesco ad avviare il componente Claude incluso in JarAI. Riavvia JarAI e riprova.'
+      : 'Questa installazione di JarAI è incompleta (manca il componente Claude incluso). Reinstalla l\'ultima versione di JarAI.';
   }
   if (/credit balance|billing/i.test(testo)) {
     return 'Il credito della chiave dello studio è esaurito. Controlla il piano su console.anthropic.com.';
@@ -325,6 +330,7 @@ async function eseguiVerifica(): Promise<EsitoVerifica> {
     }
     return { collegato: false, messaggio: 'Non ho ricevuto risposta da Claude.' };
   } catch (err) {
+    void registraErroreGrezzo('eccezione-verifica', err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err));
     return { collegato: false, messaggio: messaggioErroreItaliano(err) };
   }
 }

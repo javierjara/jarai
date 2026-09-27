@@ -2,7 +2,7 @@
   "name": "jarai",
   "productName": "jarai",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.1",
   "type": "module",
   "description": "JarAI — l'assistente legale di Claude Code per lo studio, senza mai mostrare codice.",
   "author": "Studio",
@@ -12,9 +12,10 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "dist:win": "npm run build && electron-builder --win --publish never",
+    "prepara:win": "node scripts/prepara-binari-win.mjs",
+    "dist:win": "npm run prepara:win && npm run build && electron-builder --win --publish never",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
-    "release:win": "npm run build && electron-builder --win --publish always",
+    "release:win": "npm run prepara:win && npm run build && electron-builder --win --publish always",
     "release:mac": "npm run build && electron-builder --mac --publish always"
   },
   "dependencies": {
@@ -50,6 +51,7 @@
   },
   "build": {
     "appId": "com.jarai.app",
+    "afterPack": "scripts/verifica-pacchetto.cjs",
     "productName": "jarai",
     "directories": {
       "output": "release"
@@ -85,7 +87,17 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64",
+          "to": "app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64"
+        },
+        {
+          "from": "node_modules/@napi-rs/canvas-win32-x64-msvc",
+          "to": "app.asar.unpacked/node_modules/@napi-rs/canvas-win32-x64-msvc"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
