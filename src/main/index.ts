@@ -1,12 +1,28 @@
 import './polyfillPdf';
-import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
+import { app, BrowserWindow, nativeImage, protocol, session, shell } from 'electron';
 import { join } from 'node:path';
-import { registraGestionePratiche } from './pratiche';
+import { registraGestionePratiche, registraProtocolloAudio } from './pratiche';
+import { registraAnteprimaDocumenti } from './documentPreview';
 import { registraCollegamentoClaude } from './claudeIpc';
 import { registraPersistenza } from './store';
 import { registraBozze } from './bozze';
 import { registraAudioSetup } from './audioSetup';
 import { registraAggiornamenti } from './aggiornamenti';
+
+// Schema privilegiato per il player audio delle pratiche (spec §6.2): il
+// renderer, sandboxato e senza accesso al filesystem, non può puntare un
+// <audio> direttamente a un percorso sul disco dell'avvocato. "jarai-media"
+// serve quel singolo file audio via net.fetch nel main process (vedi
+// registraProtocolloAudio in pratiche.ts). "standard: true" è quello che
+// conta per il seek: senza, Chromium non tratta la risorsa come "cercabile"
+// e la barra di avanzamento del player non riesce a spostare la posizione
+// (né trascinando né cliccando) — resta sempre allo stesso punto. Con
+// "standard: true" + "stream: true" il player può cercare un punto preciso
+// senza dover ricaricare l'intero file. Va registrato qui, prima che l'app
+// sia "ready": è un requisito di Electron per gli schemi privilegiati.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'jarai-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
 
 const devServerUrl = process.env['ELECTRON_RENDERER_URL'];
 let mainWindow: BrowserWindow | null = null;
@@ -110,10 +126,16 @@ app.whenReady().then(() => {
   // CSP restrittiva: niente script remoti, niente eval. In sviluppo il
   // server Vite ha bisogno di script inline e di una connessione websocket
   // per l'HMR; quella policy più permissiva non esiste nel pacchetto finale,
-  // che carica solo file locali.
+  // che carica solo file locali. media-src 'jarai-media:' serve al player
+  // audio delle pratiche (vedi registraProtocolloAudio in pratiche.ts).
+  // connect-src 'jarai-media:' serve al calcolo della forma d'onda (fetch
+  // diretto sullo stesso URL, per leggere i campioni con la Web Audio API) —
+  // media-src riguarda solo il <audio src>, connect-src governa fetch().
+  // img-src 'blob:' serve all'anteprima documenti (PDF/immagini, spec §5.6):
+  // i byte arrivano via IPC e diventano un Blob locale, mai un file:// diretto.
   const csp = devServerUrl
-    ? "default-src 'self' http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://localhost:* ws://localhost:*;"
-    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self';";
+    ? "default-src 'self' http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' jarai-media:; connect-src 'self' jarai-media: http://localhost:* ws://localhost:*;"
+    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' jarai-media:; connect-src 'self' jarai-media:;";
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
@@ -125,6 +147,8 @@ app.whenReady().then(() => {
   });
 
   registraGestionePratiche(() => mainWindow);
+  registraProtocolloAudio();
+  registraAnteprimaDocumenti();
   registraCollegamentoClaude(() => mainWindow);
   registraPersistenza();
   registraBozze(() => mainWindow);

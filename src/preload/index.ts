@@ -101,6 +101,14 @@ const jarai = {
   scansionaCartella: (percorso: string): Promise<ImportoCartella> => ipcRenderer.invoke('pratiche:scansiona-cartella', percorso),
   verificaCartelle: (percorsi: string[]): Promise<Record<string, boolean>> => ipcRenderer.invoke('pratiche:verifica-cartelle', percorsi),
   apriNellaCartella: (percorso: string): Promise<void> => ipcRenderer.invoke('pratiche:apri-nella-cartella', percorso),
+  apriConAppPredefinita: (percorso: string): Promise<void> => ipcRenderer.invoke('pratiche:apri-con-app-predefinita', percorso),
+
+  documenti: {
+    anteprimaPdf: (percorso: string, pagina: number): Promise<{ dati: Uint8Array; larghezza: number; altezza: number; totalePagine: number }> =>
+      ipcRenderer.invoke('documenti:anteprima-pdf', { percorso, pagina }),
+    anteprimaImmagine: (percorso: string): Promise<{ dati: Uint8Array; mime: string }> =>
+      ipcRenderer.invoke('documenti:anteprima-immagine', percorso),
+  },
 
   claude: {
     verifica: (): Promise<EsitoVerifica> => ipcRenderer.invoke('claude:verifica'),
@@ -143,6 +151,8 @@ const jarai = {
   bozze: {
     salvaDocx: (titolo: string, contenuto: string): Promise<{ salvato: boolean; percorso?: string }> =>
       ipcRenderer.invoke('bozze:salva-docx', { titolo, contenuto }),
+    salvaPdf: (titolo: string, contenuto: string): Promise<{ salvato: boolean; percorso?: string }> =>
+      ipcRenderer.invoke('bozze:salva-pdf', { titolo, contenuto }),
   },
 
   audio: {

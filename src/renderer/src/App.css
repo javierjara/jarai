@@ -211,6 +211,50 @@ a { color: inherit; }
 .sidebar-system .nav-label { padding-left: 10px; }
 .sidebar-system .nav { padding-left: 0; padding-right: 0; }
 
+/* Avviso "aggiornamento disponibile", appena sopra Impostazioni: una pill
+   discreta ma curata, non un puntino anonimo — invita al click senza
+   allarmare (spec §12: mai un avviso invadente per un gesto che resta
+   sempre facoltativo). */
+@keyframes update-pill-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.update-pill {
+  width: 100%;
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 9px;
+  border: 1px solid oklch(0.62 0.12 75 / .38);
+  background: linear-gradient(180deg, oklch(0.62 0.12 75 / .16), oklch(0.62 0.12 75 / .09));
+  cursor: pointer;
+  text-align: left;
+  transition: background .12s ease, border-color .12s ease, transform .12s ease;
+  animation: update-pill-in .18s ease;
+}
+.update-pill:hover {
+  background: linear-gradient(180deg, oklch(0.62 0.12 75 / .24), oklch(0.62 0.12 75 / .14));
+  border-color: oklch(0.62 0.12 75 / .55);
+  transform: translateY(-1px);
+}
+.update-pill-ico {
+  flex-shrink: 0;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: oklch(0.62 0.12 75 / .22);
+  color: var(--amber);
+}
+.update-pill-text {
+  display: flex; flex-direction: column; gap: 1px;
+  font-size: 12px; font-weight: 500; color: var(--ink);
+  line-height: 1.25;
+}
+.update-pill-sub {
+  font-family: var(--mono);
+  font-size: 10px; font-weight: 400;
+  color: var(--muted);
+}
+
 .sidebar-footer { padding: 12px 10px 16px; }
 .privacy-pill-sidebar {
   font-family: var(--mono); font-size: 10px; color: var(--muted);
@@ -428,7 +472,7 @@ a { color: inherit; }
 .lavori-nota { font-size: 11px; color: var(--faint); }
 @keyframes lavoro-scorri { from { left: -30%; } to { left: 100%; } }
 @media (prefers-reduced-motion: reduce) {
-  .lavori-spinner, .lavoro-barra-indeterminata { animation: none; }
+  .lavori-spinner, .lavoro-barra-indeterminata, .audio-spinner { animation: none; }
   .lavoro-barra-indeterminata { left: 0; width: 100%; opacity: 0.4; }
 }
 
@@ -690,6 +734,117 @@ mark.placeholder { background: #fef9c3; border: 1px dashed #d97706; border-radiu
 .lib-file-row:hover .lib-row-del { opacity: 1; }
 .lib-row-del:hover { color: var(--oxblood); background: oklch(0.55 0.10 25 / .08); }
 
+/* ── Player audio inline (spec §6.2) ── */
+.audio-play-btn {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: var(--inkblue); color: #fff; border: none; padding: 0; margin-right: 3px;
+  box-shadow: 0 2px 6px -2px oklch(0.42 0.10 250 / .5);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.audio-play-btn svg { margin-left: 1px; } /* il triangolo "play" pesa di più a sinistra: ricentrato a vista */
+.audio-play-btn.playing svg { margin-left: 0; }
+.audio-play-btn:hover:not(:disabled) { transform: scale(1.06); box-shadow: 0 3px 10px -2px oklch(0.42 0.10 250 / .6); }
+.audio-play-btn:active:not(:disabled) { transform: scale(0.96); }
+.audio-play-btn.playing { box-shadow: 0 0 0 3px oklch(0.42 0.10 250 / .18), 0 2px 6px -2px oklch(0.42 0.10 250 / .5); }
+.audio-play-btn:disabled { opacity: .4; box-shadow: none; cursor: default; }
+.audio-spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid oklch(1 0 0 / .35); border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Player audio in stile WhatsApp: forma d'onda al posto di una barra
+   piatta, con un pallino sulla posizione corrente e un controllo di
+   velocità — vedi PraticheView.tsx, togglePlayAudio/calcolaPicchi. */
+.audio-player { margin-top: 5px; }
+/* 274px = 46 barre × 4px (max-width di .audio-bar) + 45 spazi × 2px (gap):
+   la larghezza massima che le barre riescono davvero a riempire. Senza
+   questo limite, su una riga larga il contenitore cresce più delle barre
+   (bloccate al loro max-width, impossibilitate a riempirlo) — restano
+   compresse a sinistra con dello spazio vuoto a destra, mentre il pallino
+   si posiziona in percentuale su tutta la larghezza del contenitore: il
+   risultato è un pallino "avanti" rispetto a dove le barre finiscono
+   davvero. Con il contenitore mai più largo di quanto le barre possano
+   riempire, le due percentuali (barre ascoltate, posizione del pallino)
+   restano sempre coerenti — su una riga più stretta di 274px, le barre si
+   restringono con flex-shrink e riempiono comunque tutta la larghezza
+   disponibile, stesso ragionamento. Se cambia NUM_BARRE_FORMA_ONDA in
+   PraticheView.tsx, questo valore va ricalcolato di conseguenza. */
+.audio-waveform {
+  position: relative; display: flex; align-items: center; gap: 2px;
+  height: 28px; padding: 2px 0; max-width: 274px; cursor: pointer; touch-action: none;
+}
+.audio-bar {
+  flex: 1; min-width: 2px; max-width: 4px; border-radius: 2px;
+  background: var(--line-2); transition: background .1s;
+}
+.audio-bar.ascoltata { background: var(--inkblue); }
+.audio-waveform-cursore {
+  position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--inkblue); border: 2px solid var(--surface);
+  box-shadow: 0 1px 3px oklch(0 0 0 / .3);
+  transform: translate(-50%, -50%); pointer-events: none;
+}
+.audio-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
+.audio-time {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums;
+}
+.audio-velocita {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--ink-2);
+  background: var(--paper-2); border: 1px solid var(--line); border-radius: 99px;
+  padding: 1px 8px; cursor: pointer; flex-shrink: 0; transition: background .1s, border-color .1s;
+}
+.audio-velocita:hover { background: var(--paper); border-color: var(--line-2); }
+.audio-errore { color: var(--oxblood); font-weight: 500; }
+.audio-errore-link {
+  color: var(--inkblue); font-family: var(--mono); font-size: 10.5px;
+  text-decoration: underline; text-underline-offset: 2px;
+  background: none; border: none; padding: 0; cursor: pointer;
+}
+.audio-errore-link:hover { color: var(--ink); }
+
+/* ── Navigazione per sottocartella dentro una pratica ──────
+   Una cartella importata riflette la struttura reale dello studio (spec
+   §5.4): con tante sottocartelle l'elenco piatto diventa illeggibile, quindi
+   i documenti si raggruppano per sottocartella, con intestazioni "appiccicose"
+   durante lo scroll e chip in alto per saltare subito a quella giusta. */
+.folder-chips {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 14px;
+}
+.folder-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 99px; padding: 5px 11px 5px 10px;
+  font-size: 11.5px; color: var(--ink-2);
+  cursor: pointer; transition: border-color .12s, background .12s, color .12s;
+}
+.folder-chip:hover { border-color: var(--line-2); color: var(--ink); background: var(--paper-2); }
+.folder-chip-count {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  background: var(--paper-2); border-radius: 99px; padding: 1px 6px;
+}
+.folder-chip-ghost { color: var(--muted); border-style: dashed; }
+.folder-chip-ghost:hover { color: var(--ink-2); }
+
+.lib-file-groups { display: flex; flex-direction: column; gap: 4px; }
+.doc-group + .doc-group { margin-top: 10px; }
+.doc-group-head {
+  position: sticky; top: 0; z-index: 1;
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 8px 4px; margin-bottom: 8px;
+  background: var(--paper); border-bottom: 1px solid var(--line);
+  font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+  cursor: pointer; text-align: left;
+}
+.doc-group-head:hover { color: var(--ink); }
+.doc-group-head .chevron { transition: transform .15s; color: var(--faint); flex-shrink: 0; display: flex; }
+.doc-group-head:not(.closed) .chevron { transform: rotate(90deg); }
+.doc-group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-group-head .folder-count { background: var(--paper-2); border-radius: 99px; padding: 1px 7px; }
+
 /* ── Modale importazione cartella ── */
 .upload-modal {
   background: var(--paper); border: 1px solid var(--line);
@@ -755,22 +910,66 @@ mark.placeholder { background: #fef9c3; border: 1px dashed #d97706; border-radiu
 }
 .doc-preview-modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
-/* Modale bozza (jarai-bozze) */
-.bozza-modal {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
-  width: min(760px, 100%); max-height: 85vh;
-  display: flex; flex-direction: column;
-  box-shadow: 0 12px 50px oklch(0 0 0 / .28);
+/* Più largo solo quando c'è davvero una pagina/immagine da mostrare (PDF o
+   immagine) — per gli altri formati resta la larghezza stretta di sempre. */
+.doc-preview-modal.con-anteprima { width: min(680px, 92vw); }
+
+.anteprima-doc { margin-top: 4px; }
+.anteprima-zoom { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 8px; }
+.anteprima-zoom-etichetta { min-width: 58px; justify-content: center; font-family: var(--mono); }
+.anteprima-pagina-wrap {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 160px; max-height: 68vh; overflow: hidden;
+  background: oklch(0.87 0.006 250); border: 1px solid var(--line); border-radius: 8px;
 }
-.bozza-modal-head {
-  padding: 18px 22px 14px; border-bottom: 1px solid var(--line);
+/* Con lo zoom attivo il riquadro diventa uno scorrimento vero (altezza
+   fissa invece di "al massimo tanto", niente più centratura automatica —
+   altrimenti una pagina più larga del riquadro comincerebbe a metà) così
+   si può scorrere per vedere il resto della pagina ingrandita. */
+.anteprima-pagina-wrap.zoomed { height: 68vh; overflow: auto; align-items: flex-start; justify-content: flex-start; }
+.anteprima-pagina { max-width: 100%; max-height: 68vh; object-fit: contain; display: block; box-shadow: 0 1px 4px oklch(0 0 0 / .18); }
+.anteprima-caricando { font-size: 12.5px; color: var(--muted); padding: 20px; }
+.anteprima-errore {
+  font-size: 12.5px; color: var(--oxblood); line-height: 1.5;
+  background: oklch(0.55 0.10 25 / .08); border: 1px solid oklch(0.55 0.10 25 / .25);
+  border-radius: 8px; padding: 10px 12px; margin-top: 4px;
+}
+.anteprima-nav { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 10px; }
+.anteprima-contatore { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+
+/* ── Pannello documento (jarai-bozze, spec §5.6) ──────────────────────
+   Vero pannello laterale, non un modale sopra la chat: ConversazioneView
+   avvolge ".home-page" e il pannello in ".doc-panel-wrap" (riga flex), così
+   la chat si restringe invece di sparire sotto un overlay. */
+.doc-panel-wrap { display: flex; flex-direction: row; height: 100%; min-height: 0; }
+.doc-panel-wrap .home-page { flex: 1 1 0; min-width: 0; }
+
+.doc-panel {
+  width: 440px; flex-shrink: 0;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--surface); border-left: 1px solid var(--line);
+  box-shadow: -10px 0 28px -16px oklch(0 0 0 / .18);
+}
+.doc-panel-head {
+  padding: 16px 20px 12px; border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0;
 }
-.bozza-modal-head h3 { margin: 0; font-family: var(--serif); font-size: 19px; font-weight: 500; color: var(--ink); }
-.bozza-modal-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px; background: oklch(0.87 0.006 250); }
-.bozza-modal-body .msg-text { background: var(--surface); border-radius: 4px; padding: 32px 36px; box-shadow: 0 1px 3px oklch(0 0 0 / .14); max-width: 680px; margin: 0 auto; }
-.bozza-modal-foot { padding: 14px 22px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
-.bozza-modal-esito { font-size: 12px; color: var(--sage); margin-right: auto; }
+.doc-panel-head h3 {
+  margin: 0; font-family: var(--serif); font-size: 17px; font-weight: 500; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.doc-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.doc-panel-action {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line);
+  background: var(--paper); color: var(--ink-2); font-size: 12px; cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.doc-panel-action:hover:not(:disabled) { background: var(--paper-2); border-color: var(--line-2); color: var(--ink); }
+.doc-panel-action:disabled { opacity: .4; cursor: default; }
+.doc-panel-esito { padding: 8px 20px 0; font-size: 11.5px; color: var(--sage); flex-shrink: 0; }
+.doc-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px; background: oklch(0.87 0.006 250); }
+.doc-panel-body .msg-text { background: var(--surface); border-radius: 4px; padding: 28px 30px; box-shadow: 0 1px 3px oklch(0 0 0 / .14); }
 
 /* ─── Impostazioni ───────────────────────────────────────── */
 .settings-stack { display: flex; flex-direction: column; gap: 24px; }

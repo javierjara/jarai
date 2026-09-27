@@ -3,6 +3,7 @@ import type { Bozza, Conversazione, Documento, LavoroDocumento, Messaggio, Prati
 import { PROCEDURE } from '../types';
 import PlanPanel from './PlanPanel';
 import Markdown from './Markdown';
+import PannelloDocumento from './PannelloDocumento';
 import { FolderIcon, SendIcon, StopIcon } from './icons';
 
 interface Props {
@@ -155,150 +156,116 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
     void window.jarai.claude.ferma(conversazioneIdRef.current);
   }
 
-  const [salvandoBozza, setSalvandoBozza] = useState(false);
-  const [esitoSalvataggio, setEsitoSalvataggio] = useState<string | null>(null);
-
-  async function salvaBozzaInWord(bozza: Bozza) {
-    setSalvandoBozza(true);
-    setEsitoSalvataggio(null);
-    const esito = await window.jarai.bozze.salvaDocx(bozza.titolo, bozza.contenuto);
-    setSalvandoBozza(false);
-    setEsitoSalvataggio(esito.salvato ? `Salvata${esito.percorso ? ` in ${esito.percorso}` : ''}` : null);
-  }
-
   return (
-    <div className="home-page">
-      <div className="home-topbar">
-        <div className="home-topbar-title">
-          <h2>{pratica ? pratica.nome : 'Fai una domanda'}</h2>
-          <select
-            className="procedura-select"
-            value={procedura}
-            onChange={(e) => setProcedura(e.target.value as Procedura)}
-          >
-            {PROCEDURE.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="home-actions">
-          <select className="procedura-select" value={qualita} onChange={(e) => setQualita(e.target.value as 'Standard' | 'Massima')}>
-            <option value="Standard">Qualità: Standard</option>
-            <option value="Massima">Qualità: Massima — più lenta</option>
-          </select>
-        </div>
-      </div>
-
-      {piano && piano.length > 0 && <PlanPanel passi={piano} />}
-
-      <div className="chat-thread" ref={threadRef}>
-        {messaggi.length === 0 && !attivita ? (
-          <div className="home-empty">
-            <div className="home-empty-icon">✎</div>
-            <div className="home-empty-title">Cosa ti serve oggi?</div>
-            <div className="home-empty-sub">
-              {pratica
-                ? `Fai una domanda sulla pratica «${pratica.nome}» oppure chiedi di redigere un atto.`
-                : 'Scegli una pratica dalla sidebar oppure fai una domanda generale.'}
-            </div>
+    <div className="doc-panel-wrap">
+      <div className="home-page">
+        <div className="home-topbar">
+          <div className="home-topbar-title">
+            <h2>{pratica ? pratica.nome : 'Fai una domanda'}</h2>
+            <select
+              className="procedura-select"
+              value={procedura}
+              onChange={(e) => setProcedura(e.target.value as Procedura)}
+            >
+              {PROCEDURE.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
           </div>
-        ) : (
-          messaggi.map((m) => <MessaggioBubble key={m.id} m={m} documenti={documentiPratica} onApriBozza={setBozzaAperta} />)
-        )}
-        {lavori.some((l) => l.fase !== 'completato') ? (
-          <LavoriInCorso lavori={lavori} />
-        ) : (
-          attivita && <div className="artifact-processing">◌ {attivita}</div>
-        )}
+          <div className="home-actions">
+            <select className="procedura-select" value={qualita} onChange={(e) => setQualita(e.target.value as 'Standard' | 'Massima')}>
+              <option value="Standard">Qualità: Standard</option>
+              <option value="Massima">Qualità: Massima — più lenta</option>
+            </select>
+          </div>
+        </div>
 
-        {confermaVisibile && (
-          <div className="msg msg-assistant">
-            <div className="msg-avatar">AI</div>
-            <div className="msg-body">
-              <div className="msg-text">Ho preparato il report delle spese ricorrenti. Prima di salvarlo serve la tua conferma.</div>
-              <div className="confirm-inline">
-                <div className="confirm-inline-title">⚠ Serve la tua conferma</div>
-                <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4 }}>
-                  Sto per salvare «Report spese ricorrenti» nella cartella JarAI - Bozze.
-                </div>
-                <div className="confirm-inline-actions">
-                  <button className="btn danger" onClick={() => setConfermaVisibile(false)}>
-                    Rifiuta
-                  </button>
-                  <button className="btn primary" onClick={() => setConfermaVisibile(false)}>
-                    Approva
-                  </button>
+        {piano && piano.length > 0 && <PlanPanel passi={piano} />}
+
+        <div className="chat-thread" ref={threadRef}>
+          {messaggi.length === 0 && !attivita ? (
+            <div className="home-empty">
+              <div className="home-empty-icon">✎</div>
+              <div className="home-empty-title">Cosa ti serve oggi?</div>
+              <div className="home-empty-sub">
+                {pratica
+                  ? `Fai una domanda sulla pratica «${pratica.nome}» oppure chiedi di redigere un atto.`
+                  : 'Scegli una pratica dalla sidebar oppure fai una domanda generale.'}
+              </div>
+            </div>
+          ) : (
+            messaggi.map((m) => <MessaggioBubble key={m.id} m={m} documenti={documentiPratica} onApriBozza={setBozzaAperta} />)
+          )}
+          {lavori.some((l) => l.fase !== 'completato') ? (
+            <LavoriInCorso lavori={lavori} />
+          ) : (
+            attivita && <div className="artifact-processing">◌ {attivita}</div>
+          )}
+
+          {confermaVisibile && (
+            <div className="msg msg-assistant">
+              <div className="msg-avatar">AI</div>
+              <div className="msg-body">
+                <div className="msg-text">Ho preparato il report delle spese ricorrenti. Prima di salvarlo serve la tua conferma.</div>
+                <div className="confirm-inline">
+                  <div className="confirm-inline-title">⚠ Serve la tua conferma</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 4 }}>
+                    Sto per salvare «Report spese ricorrenti» nella cartella JarAI - Bozze.
+                  </div>
+                  <div className="confirm-inline-actions">
+                    <button className="btn danger" onClick={() => setConfermaVisibile(false)}>
+                      Rifiuta
+                    </button>
+                    <button className="btn primary" onClick={() => setConfermaVisibile(false)}>
+                      Approva
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
-      </div>
-
-      <div className="composer-wrap">
-        {pratica && (
-          <div className="attached-files">
-            <span className="attached-chip folder-context-chip">
-              <FolderIcon size={12} />
-              {pratica.nome}
-            </span>
-          </div>
-        )}
-        <div className="composer">
-          <textarea
-            ref={composerRef}
-            className="composer-input"
-            rows={1}
-            placeholder="Scrivi cosa ti serve…"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                invia();
-              }
-            }}
-          />
-          {elaborando ? (
-            <button className="composer-send ready" onClick={ferma} title="Ferma">
-              <StopIcon />
-            </button>
-          ) : (
-            <button className={`composer-send ${input.trim() ? 'ready' : ''}`} onClick={invia} disabled={!input.trim()}>
-              <SendIcon size={15} />
-            </button>
           )}
         </div>
-      </div>
 
-      {bozzaAperta && (
-        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setBozzaAperta(null); }}>
-          <div className="bozza-modal">
-            <div className="bozza-modal-head">
-              <h3>{bozzaAperta.titolo}</h3>
-              <button className="btn-icon" onClick={() => setBozzaAperta(null)}>
-                ×
-              </button>
+        <div className="composer-wrap">
+          {pratica && (
+            <div className="attached-files">
+              <span className="attached-chip folder-context-chip">
+                <FolderIcon size={12} />
+                {pratica.nome}
+              </span>
             </div>
-            <div className="bozza-modal-body">
-              <div className="msg-text">
-                <Markdown>{bozzaAperta.contenuto}</Markdown>
-              </div>
-            </div>
-            <div className="bozza-modal-foot">
-              {esitoSalvataggio && <span className="bozza-modal-esito">✓ {esitoSalvataggio}</span>}
-              <button className="btn" onClick={() => setBozzaAperta(null)}>
-                Chiudi
+          )}
+          <div className="composer">
+            <textarea
+              ref={composerRef}
+              className="composer-input"
+              rows={1}
+              placeholder="Scrivi cosa ti serve…"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  invia();
+                }
+              }}
+            />
+            {elaborando ? (
+              <button className="composer-send ready" onClick={ferma} title="Ferma">
+                <StopIcon />
               </button>
-              <button className="btn primary" onClick={() => void salvaBozzaInWord(bozzaAperta)} disabled={salvandoBozza}>
-                {salvandoBozza ? 'Salvataggio…' : 'Salva in Word'}
+            ) : (
+              <button className={`composer-send ${input.trim() ? 'ready' : ''}`} onClick={invia} disabled={!input.trim()}>
+                <SendIcon size={15} />
               </button>
-            </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
+
+      {bozzaAperta && <PannelloDocumento bozza={bozzaAperta} onChiudi={() => setBozzaAperta(null)} />}
     </div>
   );
 }

@@ -85,6 +85,19 @@ export const StopIcon = ({ size = 14 }: IconProps) => (
   </svg>
 );
 
+export const PlayIcon = ({ size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M7 4.5c0-1.1 1.2-1.77 2.13-1.18l10.2 6.5a1.4 1.4 0 0 1 0 2.36l-10.2 6.5C8.2 19.27 7 18.6 7 17.5z" />
+  </svg>
+);
+
+export const PauseIcon = ({ size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <rect x="6" y="4" width="4.5" height="16" rx="1.2" />
+    <rect x="13.5" y="4" width="4.5" height="16" rx="1.2" />
+  </svg>
+);
+
 export const PlusIcon = ({ size = 14 }: IconProps) => (
   <svg {...base(size)}>
     <line x1="12" y1="5" x2="12" y2="19" />
@@ -102,6 +115,21 @@ export const CloseIcon = ({ size = 15 }: IconProps) => (
   <svg {...base(size)}>
     <line x1="18" y1="6" x2="6" y2="18" />
     <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
+export const DownloadIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+
+export const CopyIcon = ({ size = 14 }: IconProps) => (
+  <svg {...base(size)}>
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
   </svg>
 );
 

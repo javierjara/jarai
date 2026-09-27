@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Conversazione, MainView, Pratica, Studio } from '../types';
-import { ChevronIcon, FolderIcon, HistoryIcon, HomeIcon, SettingsIcon } from './icons';
+import { ChevronIcon, DownloadIcon, FolderIcon, HistoryIcon, HomeIcon, SettingsIcon } from './icons';
 
 interface Props {
   currentView: MainView;
@@ -11,6 +11,7 @@ interface Props {
   onOpenConversazione: (c: Conversazione) => void;
   onNuovaConversazione: (praticaId: string) => void;
   onDeleteConversazione: (id: string) => void;
+  aggiornamentoDisponibile?: boolean;
 }
 
 const MAX_VISIBILI = 5;
@@ -24,6 +25,7 @@ export default function Sidebar({
   onOpenConversazione,
   onNuovaConversazione,
   onDeleteConversazione,
+  aggiornamentoDisponibile = false,
 }: Props) {
   const [aperte, setAperte] = useState<Set<string>>(new Set([pratiche[0]?.id]));
   const [espanseAll, setEspanseAll] = useState<Set<string>>(new Set());
@@ -148,6 +150,17 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-system">
+        {aggiornamentoDisponibile && (
+          <button className="update-pill" onClick={() => onNavigate('impostazioni')}>
+            <span className="update-pill-ico">
+              <DownloadIcon size={12} />
+            </span>
+            <span className="update-pill-text">
+              Aggiornamento disponibile
+              <span className="update-pill-sub">Vai in Impostazioni</span>
+            </span>
+          </button>
+        )}
         <div className="nav-label">Sistema</div>
         <nav className="nav">
           <NavBtn id="impostazioni" label="Impostazioni" current={currentView} onNavigate={onNavigate} icon={<SettingsIcon />} />

@@ -1,8 +1,10 @@
-import { dialog, ipcMain, shell, type BrowserWindow } from 'electron';
+import { dialog, ipcMain, protocol, shell, type BrowserWindow } from 'electron';
+import { createReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { extname, basename, dirname, join, relative } from 'node:path';
+import { Readable } from 'node:stream';
 import { z } from 'zod';
-import { CARTELLA_PRINCIPALE, ESTENSIONI_LEGGIBILI } from './formatiDocumenti';
+import { CARTELLA_PRINCIPALE, ESTENSIONI_AUDIO, ESTENSIONI_LEGGIBILI } from './formatiDocumenti';
 import { estraiZip } from './zip';
 
 export { CARTELLA_PRINCIPALE };
@@ -110,6 +112,88 @@ async function leggiCartellaRicorsiva(dirPath: string, baseDir: string, win: Bro
 const percorsoSchema = z.string().min(1);
 const percorsiSchema = z.array(z.string().min(1));
 
+// Tipo MIME per ogni estensione audio supportata — senza un Content-Type
+// corretto Chromium a volte rifiuta di riprodurre il file anche se i byte
+// sono giusti.
+const MIME_AUDIO: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  wma: 'audio/x-ms-wma',
+};
+
+// Player audio in pratica (spec §6.2): serve il file al tag <audio> del
+// renderer via un protocollo dedicato invece di leggerlo a mano e spedirlo
+// come Buffer sopra IPC — quella strada è pensata per messaggi piccoli, non
+// per file audio da decine di MB, ed è un punto fragile (nessuna ricerca nel
+// player, tutto il file in memoria prima ancora di sentirne un secondo).
+//
+// La richiesta "Range" (per cercare un punto preciso) viene gestita a mano
+// qui, invece di affidarsi a un net.fetch su file:// e sperare che la
+// inoltri da solo: con un tentativo precedente (net.fetch con gli header
+// della richiesta originale inoltrati) il seek nel player non funzionava —
+// affidabile al 100% solo leggendo noi stessi l'intervallo di byte richiesto
+// e rispondendo con lo status HTTP giusto (206 Partial Content), esattamente
+// come farebbe un vero server che serve file. Solo le estensioni audio note
+// sono ammesse — mai un lettore di file generico esposto al renderer.
+export function registraProtocolloAudio(): void {
+  protocol.handle('jarai-media', async (request) => {
+    try {
+      const percorso = decodeURIComponent(new URL(request.url).searchParams.get('p') ?? '');
+      const ext = extname(percorso).slice(1).toLowerCase();
+      if (!percorso || !ESTENSIONI_AUDIO.has(ext)) {
+        return new Response('Formato audio non supportato.', { status: 403 });
+      }
+
+      const stat = await fs.stat(percorso);
+      const dimensione = stat.size;
+      const tipo = MIME_AUDIO[ext] ?? 'application/octet-stream';
+      const rangeHeader = request.headers.get('Range');
+
+      if (!rangeHeader) {
+        // Prima richiesta, senza Range: tutto il file, ma "Accept-Ranges"
+        // dice al browser che può chiedere un intervallo più avanti — è
+        // quello che permette poi il seek.
+        const corpo = Readable.toWeb(createReadStream(percorso)) as ReadableStream<Uint8Array>;
+        return new Response(corpo, {
+          status: 200,
+          headers: { 'Content-Type': tipo, 'Content-Length': String(dimensione), 'Accept-Ranges': 'bytes' },
+        });
+      }
+
+      // Formato standard: "bytes=1234-" oppure "bytes=1234-5678".
+      const corrispondenza = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+      if (!corrispondenza) return new Response('Intestazione Range non valida.', { status: 416 });
+
+      const inizio = corrispondenza[1] ? Number(corrispondenza[1]) : 0;
+      const fineRichiesta = corrispondenza[2] ? Number(corrispondenza[2]) : dimensione - 1;
+      const fine = Math.min(fineRichiesta, dimensione - 1);
+      if (Number.isNaN(inizio) || Number.isNaN(fine) || inizio > fine || inizio >= dimensione) {
+        return new Response('Intervallo non disponibile.', {
+          status: 416,
+          headers: { 'Content-Range': `bytes */${dimensione}` },
+        });
+      }
+
+      const corpo = Readable.toWeb(createReadStream(percorso, { start: inizio, end: fine })) as ReadableStream<Uint8Array>;
+      return new Response(corpo, {
+        status: 206,
+        headers: {
+          'Content-Type': tipo,
+          'Content-Length': String(fine - inizio + 1),
+          'Content-Range': `bytes ${inizio}-${fine}/${dimensione}`,
+          'Accept-Ranges': 'bytes',
+        },
+      });
+    } catch (err) {
+      return new Response(err instanceof Error ? err.message : 'File non leggibile.', { status: 404 });
+    }
+  });
+}
+
 export function registraGestionePratiche(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('pratiche:importa-cartella', async () => {
     const win = getWindow();
@@ -158,5 +242,16 @@ export function registraGestionePratiche(getWindow: () => BrowserWindow | null):
   ipcMain.handle('pratiche:apri-nella-cartella', (_event, percorsoInput: unknown) => {
     const percorso = percorsoSchema.parse(percorsoInput);
     shell.showItemInFolder(percorso);
+  });
+
+  // Ripiego quando il lettore integrato non riesce a riprodurre un file (spec
+  // §6.2) — capita con alcuni .m4a/.wma che usano un codec che Chromium non
+  // decodifica pur avendo l'estensione giusta. Apre il file con l'app che il
+  // sistema operativo associa a quel formato (QuickTime, VLC, Windows Media
+  // Player...), quasi sempre più permissiva di un browser.
+  ipcMain.handle('pratiche:apri-con-app-predefinita', async (_event, percorsoInput: unknown) => {
+    const percorso = percorsoSchema.parse(percorsoInput);
+    const erroreOsSeFallito = await shell.openPath(percorso);
+    if (erroreOsSeFallito) throw new Error(erroreOsSeFallito);
   });
 }

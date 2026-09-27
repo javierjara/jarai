@@ -19,6 +19,29 @@ export default function App() {
   const [selectedPraticaId, setSelectedPraticaId] = useState<string | null>(null);
   const [homeKey, setHomeKey] = useState(0);
   const [pronto, setPronto] = useState(false);
+  const [aggiornamentoDisponibile, setAggiornamentoDisponibile] = useState(false);
+
+  // Avviso aggiornamento (spec §12): un solo controllo silenzioso, con un
+  // piccolo ritardo per non competere con l'avvio dell'app — chiedere "c'è
+  // una versione più recente?" non tocca nulla sul PC dello studio, a
+  // differenza di scaricarla o installarla, che restano sempre un gesto
+  // esplicito dell'avvocato in Impostazioni (mai un controllo ripetuto da
+  // solo). Il pallino sparisce da sé al riavvio su una versione aggiornata:
+  // lo stato è solo in memoria, non c'è nulla da "pulire" esplicitamente.
+  useEffect(() => {
+    const timer = setTimeout(() => void window.jarai.aggiornamenti.controlla(), 4000);
+    const rimuoviListener = window.jarai.aggiornamenti.onEvento((evento) => {
+      if (evento.tipo === 'disponibile' || evento.tipo === 'scaricato') {
+        setAggiornamentoDisponibile(true);
+      } else if (evento.tipo === 'non-disponibile' || evento.tipo === 'errore') {
+        setAggiornamentoDisponibile(false);
+      }
+    });
+    return () => {
+      clearTimeout(timer);
+      rimuoviListener();
+    };
+  }, []);
 
   // Persistenza locale (spec §8, in attesa di SQLite — Fase 5): al primo
   // avvio carica quanto salvato in precedenza; se non c'è nulla (primo
@@ -252,6 +275,7 @@ export default function App() {
         onOpenConversazione={apriConversazione}
         onNuovaConversazione={nuovaConversazione}
         onDeleteConversazione={eliminaConversazione}
+        aggiornamentoDisponibile={aggiornamentoDisponibile}
       />
       <main className="main-area">{renderView()}</main>
     </div>

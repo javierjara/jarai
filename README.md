@@ -3,16 +3,18 @@
 L'assistente legale di Claude Code per lo studio — senza mai mostrare codice.
 Specifica completa: [`../JarAI-Spec.md`](../JarAI-Spec.md).
 
-## Stato attuale: Fase 3 in corso, con pezzi di Fase 2 e Fase 4 già completi
+## Stato attuale: Fase 3 completa, con pezzi di Fase 2 e Fase 4 già completi
 
 Fase 1 (Guscio) completa. Fase 2 (Collegamento a Claude) completa: streaming
 reale, login ufficiale guidato con un solo pulsante "Collega Claude" (stile
 T3 Code — due soli stati, collegato o no), stato persistito fra un riavvio e
-l'altro. Fase 3 (Pratiche reali) in corso: la pratica nasce già legata 1:1 a
-una cartella sul disco, con rilevamento di "Cartella non trovata" e "Trova di
-nuovo" dopo uno spostamento; lettura reale estesa a DOC, RTF, MSG, P7M e OCR
-delle immagini. Anticipato dalla Fase 4 (Motore legale): Claude legge davvero
-i documenti della pratica selezionata. Vedi spec §12 per il piano completo.
+l'altro. Fase 3 (Pratiche reali) **completa**: la pratica nasce già legata
+1:1 a una cartella sul disco, con rilevamento di "Cartella non trovata" e
+"Trova di nuovo" dopo uno spostamento; lettura reale estesa a DOC, RTF, MSG,
+P7M, OCR delle immagini **e OCR delle pagine scansionate nei PDF** (fino a
+30 pagine scansionate per documento, con avviso se ce ne sono di più).
+Anticipato dalla Fase 4 (Motore legale): Claude legge davvero i documenti
+della pratica selezionata. Vedi spec §12 per il piano completo.
 
 Cosa c'è:
 
@@ -61,14 +63,18 @@ con validazione zod, niente `webview`, niente finestre esterne non gestite.
 `~/.claude` dell'avvocato — un suo uso personale di Claude Code sullo stesso
 computer resta separato, sia con la chiave sia con il login guidato.
 
-**Lettura documenti — limiti attuali:** PDF, DOCX, DOC, RTF, TXT, EML, MSG,
-P7M, immagini (JPG/PNG/GIF/WebP, con OCR italiano+inglese via `tesseract.js`)
-e audio (MP3, M4A, WAV, OGG, AAC, FLAC, WMA) sono leggibili automaticamente.
+**Lettura documenti — limiti attuali:** PDF (testuale e scansionato), DOCX,
+DOC, RTF, TXT, EML, MSG, P7M, immagini (JPG/PNG/GIF/WebP, con OCR
+italiano+inglese via `tesseract.js`) e audio (MP3, M4A, WAV, OGG, AAC, FLAC,
+WMA) sono leggibili automaticamente. Nei PDF, le pagine senza un layer di
+testo (sotto i 20 caratteri) vengono riconosciute come scansionate e lette
+con lo stesso OCR — fino a 30 pagine scansionate per documento, con un
+avviso nel testo se il fascicolo ne ha di più (un tetto voluto: l'OCR costa
+qualche secondo a pagina e un fascicolo scansionato può averne centinaia).
 L'OCR scarica i modelli lingua al primo uso (rete richiesta una volta sola,
-poi restano in cache nella cartella dati) — **i PDF scansionati senza testo
-non hanno ancora l'OCR delle pagine**, solo le immagini importate
-singolarmente. Il testo di ogni documento è troncato a 60.000 caratteri e
-letto una sola volta per conversazione (come in legis). Nessuna ricerca
+poi restano in cache nella cartella dati). Il testo di ogni documento è
+troncato a 60.000 caratteri e letto una sola volta per conversazione (come
+in legis). Nessuna ricerca
 full-text ancora (`cerca_nei_documenti` di spec §6.2 non c'è): il modello
 deve sapere quale documento leggere, di solito dopo un `elenca_documenti`.
 
@@ -166,18 +172,23 @@ esistente invece di crearne una nuova.
 
 ## Prossimi passi (spec §12)
 
-1. **Pratiche reali** — resta l'OCR delle pagine scansionate nei PDF (oggi
-   solo le immagini importate singolarmente hanno l'OCR).
-2. **Motore legale** — fatto: `elenca_documenti`, `leggi_documento`,
+Fase 3 (Pratiche reali) è completa — vedi "Stato attuale" sopra.
+
+1. **Motore legale** — fatto: `elenca_documenti`, `leggi_documento`,
    `crea_bozza` + salvataggio Word. Restano `cerca_nei_documenti`,
    `jarai-ricerca` (norme/giurisprudenza), `esporta_pdf`, assistenti
    specialisti, procedure, e la traduzione completa delle attività in chat
    (oggi solo "sto leggendo/guardando i documenti/preparando la bozza",
    generico — non ancora il nome del file).
-3. **Controllo** — `PermissionGate` vero (oggi il salvataggio è già
+2. **Controllo** — `PermissionGate` vero (oggi il salvataggio è già
    un'azione umana esplicita, ma senza un log strutturato), versioni delle
    bozze, pannello Modifiche, registro Attività in SQLite.
-4. **Telefono** — relay Cloudflare, pairing QR, PWA.
+3. **Telefono** — relay Cloudflare, pairing QR, PWA.
+4. **Motore proprietario** (Fase 8, spec §12, §15 domanda 5) — sostituire
+   `@anthropic-ai/claude-agent-sdk` con un motore su `@anthropic-ai/sdk` +
+   `@modelcontextprotocol/sdk` diretti, condizione per vendere la modalità
+   Licenza JarAI (`jarai-proxy`) senza l'approvazione esplicita di
+   Anthropic. Non blocca lo sviluppo attuale, solo le vendite sul serio.
 5. **Firma dell'installer Windows** (spec §12, Fase 7 "Rifinitura") — oggi
    `dist:win`/`release:win` saltano la firma ("no signing info identified"),
    quindi chi scarica l'installer vede l'avviso "PC protetto da Windows"

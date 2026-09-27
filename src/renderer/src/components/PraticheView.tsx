@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Conversazione, Documento, FileImportato, Pratica } from '../types';
-import { CloseIcon, FolderIcon, PencilIcon, PlusIcon, SearchIcon } from './icons';
+import { ChevronIcon, CloseIcon, FolderIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, SearchIcon } from './icons';
 import ImportaCartellaModal, { type FilePendente } from './ImportaCartellaModal';
+import AnteprimaDocumento, { anteprimaSupportata } from './AnteprimaDocumento';
 
 interface Props {
   pratiche: Pratica[];
@@ -26,6 +27,35 @@ const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_DEFAULT_WIDTH = 220;
 const SIDEBAR_WIDTH_KEY = 'jarai-pratiche-sidebar-width';
 
+// Deve combaciare con CARTELLA_PRINCIPALE in src/main/formatiDocumenti.ts —
+// l'etichetta che lo scanner assegna ai file nella radice della cartella
+// collegata (non in una sottocartella come "Atti" o "Contratti").
+const CARTELLA_PRINCIPALE = 'Cartella principale';
+
+interface GruppoCartella {
+  nome: string;
+  documenti: Documento[];
+}
+
+// Raggruppa i documenti per sottocartella d'origine (spec §5.4: una pratica
+// importata da cartella riflette la struttura reale dello studio) — così una
+// cartella con centinaia di file resta navigabile invece di un unico elenco
+// piatto. "Cartella principale" sempre per prima, le altre in ordine alfabetico.
+function raggruppaPerCartella(docs: Documento[]): GruppoCartella[] {
+  const mappa = new Map<string, Documento[]>();
+  for (const d of docs) {
+    const chiave = d.cartella || CARTELLA_PRINCIPALE;
+    (mappa.get(chiave) ?? mappa.set(chiave, []).get(chiave)!).push(d);
+  }
+  return [...mappa.entries()]
+    .sort(([a], [b]) => {
+      if (a === CARTELLA_PRINCIPALE) return -1;
+      if (b === CARTELLA_PRINCIPALE) return 1;
+      return a.localeCompare(b, 'it');
+    })
+    .map(([nome, documenti]) => ({ nome, documenti }));
+}
+
 function fmtData(iso: string) {
   return new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' });
 }
@@ -33,6 +63,29 @@ function fmtData(iso: string) {
 function fmtSize(b: number) {
   return b > 1_000_000 ? `${(b / 1_000_000).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`;
 }
+
+// Deve combaciare con ESTENSIONI_AUDIO in src/main/formatiDocumenti.ts.
+const ESTENSIONI_AUDIO = new Set(['mp3', 'm4a', 'wav', 'ogg', 'aac', 'flac', 'wma']);
+
+function eAudio(tipo: string) {
+  return ESTENSIONI_AUDIO.has(tipo.toLowerCase());
+}
+
+function fmtTempo(sec: number) {
+  if (!Number.isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Player audio in stile WhatsApp: forma d'onda al posto della barra piatta.
+const NUM_BARRE_FORMA_ONDA = 46;
+// Mentre i picchi veri sono ancora in calcolo (o se il calcolo fallisce):
+// barre piatte alla stessa altezza minima, mai una lista vuota — la
+// riproduzione parte comunque subito, la forma d'onda vera arriva un
+// istante dopo senza bloccare nulla.
+const SEGNAPOSTO_FORMA_ONDA = Array(NUM_BARRE_FORMA_ONDA).fill(0);
+const LIVELLI_VELOCITA_AUDIO = [1, 1.5, 2];
 
 export default function PraticheView({
   pratiche,
@@ -57,6 +110,166 @@ export default function PraticheView({
   const [previewDoc, setPreviewDoc] = useState<Documento | null>(null);
 
   const [importazione, setImportazione] = useState<{ cartellaNome: string; caricando: boolean; pendenti: FilePendente[] } | null>(null);
+
+  // Sottocartelle chiuse nella vista documenti raggruppata (per nome
+  // cartella): si azzera cambiando pratica, mai portata dietro da una
+  // pratica all'altra dove i nomi potrebbero coincidere per caso.
+  const [cartelleChiuse, setCartelleChiuse] = useState<Set<string>>(new Set());
+  const gruppoRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    setCartelleChiuse(new Set());
+  }, [selectedId]);
+
+  function toggleCartella(nome: string) {
+    setCartelleChiuse((prev) => {
+      const next = new Set(prev);
+      if (next.has(nome)) next.delete(nome);
+      else next.add(nome);
+      return next;
+    });
+  }
+
+  function saltaACartella(nome: string) {
+    setCartelleChiuse((prev) => {
+      if (!prev.has(nome)) return prev;
+      const next = new Set(prev);
+      next.delete(nome);
+      return next;
+    });
+    requestAnimationFrame(() => gruppoRefs.current[nome]?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
+
+  // Player audio inline nell'elenco documenti: un solo <audio> condiviso, mai
+  // due file in riproduzione insieme. Il src è un URL del protocollo
+  // "jarai-media" (registraProtocolloAudio in src/main/pratiche.ts), che
+  // serve il file dal disco senza far passare i byte a mano dal renderer.
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const audioWaveformRef = useRef<HTMLDivElement>(null);
+  const [audioAttivoId, setAudioAttivoId] = useState<string | null>(null);
+  const [audioSrc, setAudioSrc] = useState<string | null>(null);
+  const [audioCaricando, setAudioCaricando] = useState(false);
+  const [audioErroreId, setAudioErroreId] = useState<string | null>(null);
+  const [audioInRiproduzione, setAudioInRiproduzione] = useState(false);
+  const [audioTempo, setAudioTempo] = useState(0);
+  const [audioDurata, setAudioDurata] = useState(0);
+  // Altezze normalizzate (0-1) delle barre della forma d'onda, calcolate
+  // dai campioni veri dell'audio — null finché il calcolo non è finito,
+  // nel frattempo si vede SEGNAPOSTO_FORMA_ONDA.
+  const [audioPicchi, setAudioPicchi] = useState<number[] | null>(null);
+  const [audioVelocita, setAudioVelocita] = useState(1);
+  // Mentre l'avvocato trascina il pallino sulla forma d'onda, "timeupdate"
+  // dell'audio (4+ volte al secondo) non deve più aggiornare audioTempo:
+  // altrimenti la posizione reale di riproduzione "strappa via" il pallino
+  // da dove lo si sta trascinando ad ogni fotogramma, rendendo il
+  // trascinamento impossibile. Un ref, non uno stato: va letto dentro un
+  // gestore dell'elemento <audio> senza aspettare un nuovo render.
+  const trascinandoRef = useRef(false);
+
+  // Converte una posizione orizzontale del mouse/dito in un punto preciso
+  // dell'audio — usata sia al primo clic sulla forma d'onda (salta subito
+  // lì, come WhatsApp) sia continuando a trascinare fuori dai suoi bordi.
+  const cercaSuFormaDonda = useCallback(
+    (clientX: number) => {
+      const elemento = audioWaveformRef.current;
+      if (!elemento || !audioDurata) return;
+      const rect = elemento.getBoundingClientRect();
+      const frazione = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      const t = frazione * audioDurata;
+      setAudioTempo(t);
+      if (audioRef.current) audioRef.current.currentTime = t;
+    },
+    [audioDurata],
+  );
+
+  // Il trascinamento continua anche se il mouse esce dai bordi della forma
+  // d'onda (stesso schema già usato sopra per il ridimensionamento della
+  // sidebar delle pratiche: ascoltatori su "window", non sul solo elemento).
+  useEffect(() => {
+    const handleMove = (e: MouseEvent) => { if (trascinandoRef.current) cercaSuFormaDonda(e.clientX); };
+    const handleMoveTouch = (e: TouchEvent) => { if (trascinandoRef.current) cercaSuFormaDonda(e.touches[0].clientX); };
+    const rilascia = () => { trascinandoRef.current = false; };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('touchmove', handleMoveTouch);
+    window.addEventListener('mouseup', rilascia);
+    window.addEventListener('touchend', rilascia);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('touchmove', handleMoveTouch);
+      window.removeEventListener('mouseup', rilascia);
+      window.removeEventListener('touchend', rilascia);
+    };
+  }, [cercaSuFormaDonda]);
+
+  // Forma d'onda vera (spec: come le note vocali di WhatsApp), calcolata
+  // leggendo i campioni reali dell'audio con la Web Audio API — nessuna
+  // libreria nuova, nessun canale IPC in più: lo stesso URL già usato per
+  // la riproduzione si può anche leggere con fetch() (il protocollo
+  // "jarai-media" supporta già l'API fetch). Fallisce in silenzio: se il
+  // calcolo non riesce resta il segnaposto piatto, la riproduzione non ne
+  // risente in alcun modo.
+  async function calcolaPicchi(url: string) {
+    try {
+      const risposta = await fetch(url);
+      const buffer = await risposta.arrayBuffer();
+      const contesto = new AudioContext();
+      const audioBuffer = await contesto.decodeAudioData(buffer);
+      const canale = audioBuffer.getChannelData(0);
+      const campioniPerBarra = Math.max(1, Math.floor(canale.length / NUM_BARRE_FORMA_ONDA));
+      const grezzi: number[] = [];
+      for (let i = 0; i < NUM_BARRE_FORMA_ONDA; i++) {
+        let picco = 0;
+        const inizio = i * campioniPerBarra;
+        const fine = Math.min(canale.length, inizio + campioniPerBarra);
+        for (let j = inizio; j < fine; j++) {
+          const v = Math.abs(canale[j]);
+          if (v > picco) picco = v;
+        }
+        grezzi.push(picco);
+      }
+      const massimo = Math.max(...grezzi, 0.0001);
+      setAudioPicchi(grezzi.map((p) => p / massimo));
+      void contesto.close();
+    } catch (err) {
+      console.error("[audio] calcolo forma d'onda non riuscito", err);
+    }
+  }
+
+  function cambiaVelocitaAudio(e: React.MouseEvent) {
+    e.stopPropagation();
+    const prossima = LIVELLI_VELOCITA_AUDIO[(LIVELLI_VELOCITA_AUDIO.indexOf(audioVelocita) + 1) % LIVELLI_VELOCITA_AUDIO.length];
+    setAudioVelocita(prossima);
+    if (audioRef.current) audioRef.current.playbackRate = prossima;
+  }
+
+  function togglePlayAudio(d: Documento, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!d.percorso) return;
+
+    if (audioAttivoId === d.id) {
+      if (audioInRiproduzione) audioRef.current?.pause();
+      else void audioRef.current?.play();
+      return;
+    }
+
+    setAudioErroreId(null);
+    setAudioTempo(0);
+    setAudioDurata(0);
+    setAudioCaricando(true);
+    setAudioPicchi(null);
+    setAudioVelocita(1);
+    setAudioAttivoId(d.id);
+    const url = `jarai-media://play?p=${encodeURIComponent(d.percorso)}`;
+    setAudioSrc(url);
+    void calcolaPicchi(url);
+  }
+
+  // Appena il <audio> ha il nuovo src parte da solo — è l'unico "autoplay"
+  // nell'app, ma è la diretta conseguenza di aver premuto play un istante
+  // prima, non qualcosa che accade da sé.
+  useEffect(() => {
+    if (audioSrc) void audioRef.current?.play();
+  }, [audioSrc]);
 
   const layoutRef = useRef<HTMLDivElement>(null);
   const resizingRef = useRef(false);
@@ -202,8 +415,148 @@ export default function PraticheView({
   const visibleDocs = filterQuery.trim() ? docsScoped.filter((d) => d.nome.toLowerCase().includes(filterQuery.toLowerCase())) : docsScoped;
   const totalDocs = Object.values(documenti).reduce((n, arr) => n + arr.length, 0);
 
+  // Il raggruppamento per sottocartella ha senso solo dentro una pratica
+  // (le cartelle di pratiche diverse potrebbero chiamarsi allo stesso modo)
+  // e solo se ce n'è più di una — altrimenti resta l'elenco piatto di sempre.
+  const gruppiCartelle = pratica ? raggruppaPerCartella(visibleDocs) : null;
+  const mostraGruppi = !!gruppiCartelle && gruppiCartelle.length > 1;
+
+  function rigaDocumento(d: Documento) {
+    const audio = eAudio(d.tipo);
+    const attivo = audioAttivoId === d.id;
+    const caricando = attivo && audioCaricando;
+    const inErrore = audioErroreId === d.id;
+
+    return (
+      <div key={d.id} className="lib-file-row lib-file-row-clickable" onClick={() => setPreviewDoc(d)} title="Clicca per aprire">
+        <div className="lib-file-thumb">
+          {audio ? (
+            <button
+              className={`audio-play-btn ${attivo && audioInRiproduzione ? 'playing' : ''}`}
+              disabled={!d.percorso}
+              onClick={(e) => void togglePlayAudio(d, e)}
+              title={attivo && audioInRiproduzione ? 'Metti in pausa' : 'Riproduci audio'}
+            >
+              {caricando ? <span className="audio-spinner" /> : attivo && audioInRiproduzione ? <PauseIcon size={15} /> : <PlayIcon size={15} />}
+            </button>
+          ) : (
+            <div className="mini-paper doc">
+              <div className="accent-bar" />
+              <div className="line s" />
+              <div className="line l" />
+              <div className="line m" />
+              <div className="line s" />
+              <div className="stamp" />
+              <span className="ext-tag">{d.tipo}</span>
+            </div>
+          )}
+        </div>
+        <div className="lib-file-body">
+          <div className="lib-file-name">{d.nome}</div>
+          {attivo ? (
+            <div className="audio-player" onClick={(e) => e.stopPropagation()}>
+              <div
+                ref={audioWaveformRef}
+                className="audio-waveform"
+                onMouseDown={(e) => {
+                  trascinandoRef.current = true;
+                  cercaSuFormaDonda(e.clientX);
+                }}
+                onTouchStart={(e) => {
+                  trascinandoRef.current = true;
+                  cercaSuFormaDonda(e.touches[0].clientX);
+                }}
+              >
+                {(audioPicchi ?? SEGNAPOSTO_FORMA_ONDA).map((p, i) => {
+                  const ascoltata = audioDurata > 0 && i / (audioPicchi ?? SEGNAPOSTO_FORMA_ONDA).length <= audioTempo / audioDurata;
+                  return <span key={i} className={`audio-bar ${ascoltata ? 'ascoltata' : ''}`} style={{ height: `${12 + 88 * Math.max(0.05, p)}%` }} />;
+                })}
+                {audioDurata > 0 && (
+                  <span className="audio-waveform-cursore" style={{ left: `${Math.min(100, (audioTempo / audioDurata) * 100)}%` }} />
+                )}
+              </div>
+              <div className="audio-meta-row">
+                <span className="audio-time">
+                  {fmtTempo(audioTempo)} / {fmtTempo(audioDurata)}
+                </span>
+                <button className="audio-velocita" onClick={cambiaVelocitaAudio} title="Velocità di riproduzione">
+                  {audioVelocita}×
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="lib-file-meta">
+              {inErrore && (
+                <>
+                  <span className="audio-errore">Formato non riproducibile qui</span>
+                  {d.percorso && (
+                    <button
+                      className="audio-errore-link"
+                      onClick={(e) => { e.stopPropagation(); void window.jarai.apriConAppPredefinita(d.percorso!); }}
+                    >
+                      Apri con il lettore del computer
+                    </button>
+                  )}
+                  <span className="pip" />
+                </>
+              )}
+              {!mostraGruppi && <span>{d.cartella}</span>}
+              {!mostraGruppi && <span className="pip" />}
+              {d.pagine ? (
+                <>
+                  <span>{d.pagine} p.</span>
+                  <span className="pip" />
+                </>
+              ) : d.dimensione ? (
+                <>
+                  <span>{fmtSize(d.dimensione)}</span>
+                  <span className="pip" />
+                </>
+              ) : null}
+              <span>{fmtData(d.data)}</span>
+            </div>
+          )}
+        </div>
+        {pratica && (
+          <button className="lib-row-del" title="Elimina" onClick={(e) => { e.stopPropagation(); onDeleteDocumento(pratica.id, d.id); }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14H6L5 6" />
+              <path d="M9 6V4h6v2" />
+            </svg>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="libreria-layout" ref={layoutRef}>
+      {/* Player audio condiviso da tutte le righe documento: invisibile, solo
+          l'elemento nativo che fa davvero suonare il file (spec §6.2). */}
+      <audio
+        ref={audioRef}
+        src={audioSrc ?? undefined}
+        hidden
+        onCanPlay={() => setAudioCaricando(false)}
+        onPlay={() => setAudioInRiproduzione(true)}
+        onPause={() => setAudioInRiproduzione(false)}
+        onEnded={() => {
+          setAudioInRiproduzione(false);
+          setAudioTempo(0);
+        }}
+        onLoadedMetadata={(e) => setAudioDurata(e.currentTarget.duration || 0)}
+        onTimeUpdate={(e) => { if (!trascinandoRef.current) setAudioTempo(e.currentTarget.currentTime); }}
+        onError={(e) => {
+          console.error('[audio] riproduzione non riuscita', e.currentTarget.error);
+          setAudioCaricando(false);
+          if (audioAttivoId) setAudioErroreId(audioAttivoId);
+          setAudioAttivoId(null);
+          setAudioSrc(null);
+          setAudioInRiproduzione(false);
+        }}
+      />
+
       {/* ── Sidebar: elenco pratiche ── */}
       <div className="libreria-sidebar" style={{ width: sidebarWidth }}>
         <div className="libreria-sidebar-head">
@@ -346,6 +699,24 @@ export default function PraticheView({
           </div>
         )}
 
+        {mostraGruppi && (!pratica || tab === 'documenti') && (
+          <div className="folder-chips">
+            {gruppiCartelle!.map((g) => (
+              <button key={g.nome} className="folder-chip" onClick={() => saltaACartella(g.nome)} title={`Vai a «${g.nome}»`}>
+                <FolderIcon size={11} />
+                {g.nome}
+                <span className="folder-chip-count">{g.documenti.length}</span>
+              </button>
+            ))}
+            <button
+              className="folder-chip folder-chip-ghost"
+              onClick={() => setCartelleChiuse(cartelleChiuse.size ? new Set() : new Set(gruppiCartelle!.map((g) => g.nome)))}
+            >
+              {cartelleChiuse.size ? 'Espandi tutte' : 'Comprimi tutte'}
+            </button>
+          </div>
+        )}
+
         {(!pratica || tab === 'documenti') &&
           (visibleDocs.length === 0 ? (
             <div className="empty-state">
@@ -355,52 +726,27 @@ export default function PraticheView({
                 {pratica ? 'La cartella collegata non contiene ancora documenti in un formato leggibile.' : 'Seleziona una pratica dal pannello a sinistra.'}
               </p>
             </div>
-          ) : (
-            <div className="lib-file-list">
-              {visibleDocs.map((d) => (
-                <div key={d.id} className="lib-file-row lib-file-row-clickable" onClick={() => setPreviewDoc(d)} title="Clicca per aprire">
-                  <div className="lib-file-thumb">
-                    <div className="mini-paper doc">
-                      <div className="accent-bar" />
-                      <div className="line s" />
-                      <div className="line l" />
-                      <div className="line m" />
-                      <div className="line s" />
-                      <div className="stamp" />
-                      <span className="ext-tag">{d.tipo}</span>
-                    </div>
-                  </div>
-                  <div className="lib-file-body">
-                    <div className="lib-file-name">{d.nome}</div>
-                    <div className="lib-file-meta">
-                      <span>{d.cartella}</span>
-                      {d.pagine ? (
-                        <>
-                          <span className="pip" />
-                          <span>{d.pagine} p.</span>
-                        </>
-                      ) : d.dimensione ? (
-                        <>
-                          <span className="pip" />
-                          <span>{fmtSize(d.dimensione)}</span>
-                        </>
-                      ) : null}
-                      <span className="pip" />
-                      <span>{fmtData(d.data)}</span>
-                    </div>
-                  </div>
-                  {pratica && (
-                    <button className="lib-row-del" title="Elimina" onClick={(e) => { e.stopPropagation(); onDeleteDocumento(pratica.id, d.id); }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6l-1 14H6L5 6" />
-                        <path d="M9 6V4h6v2" />
-                      </svg>
+          ) : mostraGruppi ? (
+            <div className="lib-file-groups">
+              {gruppiCartelle!.map((g) => {
+                const chiusa = cartelleChiuse.has(g.nome);
+                return (
+                  <div key={g.nome} className="doc-group" ref={(el) => { gruppoRefs.current[g.nome] = el; }}>
+                    <button className={`doc-group-head ${chiusa ? 'closed' : ''}`} onClick={() => toggleCartella(g.nome)}>
+                      <span className="chevron">
+                        <ChevronIcon size={11} />
+                      </span>
+                      <FolderIcon size={13} />
+                      <span className="doc-group-name">{g.nome}</span>
+                      <span className="folder-count">{g.documenti.length}</span>
                     </button>
-                  )}
-                </div>
-              ))}
+                    {!chiusa && <div className="lib-file-list">{g.documenti.map(rigaDocumento)}</div>}
+                  </div>
+                );
+              })}
             </div>
+          ) : (
+            <div className="lib-file-list">{visibleDocs.map(rigaDocumento)}</div>
           ))}
 
         {pratica && tab === 'conversazioni' && (
@@ -428,17 +774,21 @@ export default function PraticheView({
       {/* ── Anteprima documento ── */}
       {previewDoc && (
         <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setPreviewDoc(null); }}>
-          <div className="doc-preview-modal">
+          <div className={`doc-preview-modal ${anteprimaSupportata(previewDoc) ? 'con-anteprima' : ''}`}>
             <h3>{previewDoc.nome}</h3>
             <div className="meta">
               {previewDoc.tipo} · {previewDoc.cartella}
               {previewDoc.pagine ? ` · ${previewDoc.pagine} pagine` : ''}
               {previewDoc.dimensione ? ` · ${fmtSize(previewDoc.dimensione)}` : ''} · {fmtData(previewDoc.data)}
             </div>
-            <div className="note">
-              Claude può già leggere questo documento in conversazione (PDF, DOCX, DOC, RTF, EML, MSG, P7M, immagini con OCR). L'anteprima visiva del
-              contenuto qui nel pannello, pagina per pagina, arriva con il pannello documento della Fase 5.
-            </div>
+            {anteprimaSupportata(previewDoc) ? (
+              <AnteprimaDocumento key={previewDoc.id} doc={previewDoc} />
+            ) : (
+              <div className="note">
+                JarAI può già leggere questo documento in conversazione (PDF, DOCX, DOC, RTF, EML, MSG, P7M, immagini con OCR). L'anteprima visiva
+                pagina per pagina è disponibile per PDF e immagini; per questo formato JarAI legge comunque il testo in conversazione.
+              </div>
+            )}
             <div className="foot">
               {previewDoc.percorso && (
                 <button className="btn" onClick={() => void window.jarai.apriNellaCartella(previewDoc.percorso!)}>
