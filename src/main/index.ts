@@ -41,7 +41,7 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     title: 'jarai',
-    backgroundColor: '#f8f7f4',
+    backgroundColor: '#111110',
     icon: appIconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),

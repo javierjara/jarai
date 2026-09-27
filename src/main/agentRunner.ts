@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk';
 import type { WebContents } from 'electron';
-import { cartellaConfigurazioneClaude, leggiChiave, salvaStatoCollegamento } from './claudeAuth';
+import { salvaStatoCollegamento } from './claudeAuth';
+import { ambienteClaude, leggiLicenza, statoLicenza } from './licenza';
 import { percorsoClaudeIntegrato } from './claudeLogin';
 import { registraErroreGrezzo } from './logger';
 import { creaServerDocumenti, pulisciLettureConversazione, type DocumentoRif, type LavoroDocumento } from './documentTools';
@@ -99,7 +101,6 @@ async function opzioniBase(
   onBozza: (bozza: EventoBozza) => void,
   onLavori: (lavori: LavoroDocumento[]) => void,
 ): Promise<Options> {
-  const chiave = await leggiChiave();
   const abort = new AbortController();
   abortControllers.set(conversazioneId, abort);
 
@@ -125,11 +126,9 @@ async function opzioniBase(
     // solo l'eseguibile di Claude Code con una risoluzione che dentro l'app
     // impacchettata (asarUnpack) non si è dimostrata affidabile.
     pathToClaudeCodeExecutable: percorsoClaudeIntegrato() ?? undefined,
-    env: {
-      ...process.env,
-      CLAUDE_CONFIG_DIR: cartellaConfigurazioneClaude(),
-      ...(chiave ? { ANTHROPIC_API_KEY: chiave } : {}),
-    },
+    // Un id nuovo per ogni messaggio inviato: con la licenza JarAI il proxy
+    // conta le domande, non le singole chiamate a Claude di questo turno.
+    env: await ambienteClaude(randomUUID()),
   };
 }
 
@@ -139,6 +138,10 @@ function conParzialeEventuale(parziale: string, messaggioErrore: string): string
 
 function messaggioErroreItaliano(err: unknown): string {
   const testo = err instanceof Error ? err.message : String(err);
+  // Errori del proxy JarAI (licenza, limite del mese, modello non incluso):
+  // sono già scritti per l'avvocato, si mostrano così come arrivano.
+  const erroreLicenza = testo.match(/(Licenza JarAI[^\n]*?\.|Hai raggiunto il limite[^\n]*?JarAI\.|Modello non incluso[^\n]*)/);
+  if (erroreLicenza) return erroreLicenza[1];
   if (/native cli binary|enoent|not found/i.test(testo)) {
     // Con il claude.exe incluso in JarAI presente, l'errore non dipende da
     // un'installazione a parte: dire "installa Claude Code" a chi l'ha già
@@ -220,7 +223,7 @@ export function fermaMessaggio(conversazioneId: string): void {
 
 export interface EsitoVerifica {
   collegato: boolean;
-  modalita?: 'chiave' | 'account';
+  modalita?: 'chiave' | 'account' | 'licenza';
   messaggio?: string;
 }
 
@@ -244,8 +247,10 @@ export interface UtilizzoAbbonamento {
 // query aperta, quindi consuma un turno minimo (haiku, ~$0) ogni volta che
 // viene chiamata — per questo non parte da sola, solo su richiesta esplicita.
 export async function leggiUtilizzoAbbonamento(): Promise<UtilizzoAbbonamento | null> {
+  // Con la licenza JarAI l'utilizzo si legge dal proxy (statoLicenza) e
+  // questa richiesta conterebbe come una domanda del mese: non si fa.
+  if (await leggiLicenza()) return null;
   try {
-    const chiave = await leggiChiave();
     const q = query({
       prompt: 'ok',
       options: {
@@ -254,11 +259,7 @@ export async function leggiUtilizzoAbbonamento(): Promise<UtilizzoAbbonamento | 
         settingSources: [],
         maxTurns: 1,
         pathToClaudeCodeExecutable: percorsoClaudeIntegrato() ?? undefined,
-        env: {
-          ...process.env,
-          CLAUDE_CONFIG_DIR: cartellaConfigurazioneClaude(),
-          ...(chiave ? { ANTHROPIC_API_KEY: chiave } : {}),
-        },
+        env: await ambienteClaude(),
       },
     });
 
@@ -294,8 +295,13 @@ export async function verificaCollegamento(): Promise<EsitoVerifica> {
 }
 
 async function eseguiVerifica(): Promise<EsitoVerifica> {
+  // Con la licenza si chiede lo stato al proxy: nessuna richiesta a Claude,
+  // quindi la verifica non consuma domande del mese.
+  if (await leggiLicenza()) {
+    const stato = await statoLicenza();
+    return stato.valida ? { collegato: true, modalita: 'licenza' } : { collegato: false, messaggio: stato.messaggio };
+  }
   try {
-    const chiave = await leggiChiave();
     const options: Options = {
       model: 'claude-haiku-4-5',
       systemPrompt: 'Rispondi soltanto con la parola: ok',
@@ -306,11 +312,7 @@ async function eseguiVerifica(): Promise<EsitoVerifica> {
       // solo l'eseguibile di Claude Code con una risoluzione inaffidabile
       // dentro l'app impacchettata.
       pathToClaudeCodeExecutable: percorsoClaudeIntegrato() ?? undefined,
-      env: {
-        ...process.env,
-        CLAUDE_CONFIG_DIR: cartellaConfigurazioneClaude(),
-        ...(chiave ? { ANTHROPIC_API_KEY: chiave } : {}),
-      },
+      env: await ambienteClaude(),
     };
     let modalita: 'chiave' | 'account' | undefined;
     for await (const message of query({ prompt: 'ok?', options })) {

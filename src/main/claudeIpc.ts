@@ -1,11 +1,13 @@
 import { ipcMain, type BrowserWindow } from 'electron';
 import { z } from 'zod';
-import { haChiave, leggiStatoCollegamento, rimuoviChiave, rimuoviStatoCollegamento, salvaChiave } from './claudeAuth';
-import { fermaMessaggio, inviaMessaggio, leggiUtilizzoAbbonamento, verificaCollegamento } from './agentRunner';
+import { haChiave, leggiStatoCollegamento, rimuoviChiave, rimuoviStatoCollegamento, salvaChiave, salvaStatoCollegamento } from './claudeAuth';
+import { attivaLicenza, rimuoviLicenza, statoLicenza } from './licenza';
+import { fermaMessaggio, inviaMessaggio, verificaCollegamento } from './agentRunner';
 import { annullaLogin, avviaLogin, disconnetti, inviaCodiceLogin } from './claudeLogin';
 import { leggiUso } from './usage';
 
 const chiaveSchema = z.string().min(10);
+const licenzaSchema = z.string().trim().min(10);
 const documentoRifSchema = z.object({
   nome: z.string(),
   percorso: z.string().optional(),
@@ -48,8 +50,21 @@ export function registraCollegamentoClaude(getWindow: () => BrowserWindow | null
   ipcMain.handle('claude:disconnetti', async () => {
     await disconnetti();
     await rimuoviChiave();
+    await rimuoviLicenza();
     await rimuoviStatoCollegamento();
   });
+
+  // Licenza JarAI (src/main/licenza.ts): salvata solo se il servizio la
+  // riconosce; l'esito aggiorna subito lo stato "Collegato" in cache.
+  ipcMain.handle('claude:attiva-licenza', async (_event, licenzaInput: unknown) => {
+    const stato = await attivaLicenza(licenzaSchema.parse(licenzaInput));
+    if (stato.valida) {
+      await salvaStatoCollegamento({ collegato: true, modalita: 'licenza', verificatoIl: new Date().toISOString() });
+    }
+    return stato;
+  });
+
+  ipcMain.handle('claude:stato-licenza', async () => statoLicenza());
 
   ipcMain.handle('claude:stato-chiave', async () => ({ presente: await haChiave() }));
 
@@ -84,6 +99,4 @@ export function registraCollegamentoClaude(getWindow: () => BrowserWindow | null
   });
 
   ipcMain.handle('claude:uso', async () => leggiUso());
-
-  ipcMain.handle('claude:uso-abbonamento', async () => leggiUtilizzoAbbonamento());
 }

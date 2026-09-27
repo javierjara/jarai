@@ -178,3 +178,27 @@ esistente invece di crearne una nuova.
    un'azione umana esplicita, ma senza un log strutturato), versioni delle
    bozze, pannello Modifiche, registro Attività in SQLite.
 4. **Telefono** — relay Cloudflare, pairing QR, PWA.
+5. **Firma dell'installer Windows** (spec §12, Fase 7 "Rifinitura") — oggi
+   `dist:win`/`release:win` saltano la firma ("no signing info identified"),
+   quindi chi scarica l'installer vede l'avviso "PC protetto da Windows"
+   (Microsoft Defender SmartScreen) prima di poterlo eseguire — per il
+   pubblico di jarai (avvocati non tecnici) è un ostacolo reale alla prima
+   installazione, non solo estetico. Verificato: serve un certificato di
+   code signing, non più un semplice file `.pfx` (dal 2023 il CA/Browser
+   Forum impone che la chiave privata stia su hardware certificato — una
+   chiavetta USB o un servizio di firma cloud). Opzione scelta: **Azure
+   Trusted Signing** (ora "Azure Artifact Signing") — ~120€/anno (piano
+   Basic, 5.000 firme/mese), tutto cloud (nessuna chiavetta da tenere
+   collegata al Mac di sviluppo), ed è il sistema di fiducia di Microsoft
+   stesso che alimenta direttamente SmartScreen, quindi elimina l'avviso da
+   subito — a differenza di un certificato OV economico, la cui reputazione
+   si costruisce solo con il tempo e i download. Alternativa più cara ma
+   "portabile" (non legata all'ecosistema Microsoft): un certificato EV
+   tradizionale (DigiCert, SSL.com…), 300-900€/anno. Da marzo 2026 entrambi
+   i tipi durano al massimo 460 giorni: il rinnovo va messo in calendario,
+   non è più "una volta e basta" come i vecchi certificati triennali.
+   **Prossimo passo pratico**: attivare un abbonamento Azure Trusted
+   Signing (richiede una verifica d'identità, qualche giorno la prima
+   volta), poi collegare `electron-builder` (`win.sign` / `azureSignOptions`
+   nella config di `package.json`) così `release:win` firma da solo a ogni
+   pubblicazione.

@@ -47,7 +47,7 @@ export default function Sidebar({
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark">
-          jar<span className="accent">AI</span>
+          Jar<span className="accent">AI</span>
           <span className="dot">.</span>
         </div>
         <div className="brand-tag">STUDIO</div>

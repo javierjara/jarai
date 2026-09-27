@@ -16,7 +16,7 @@ const STATO_PATH = () => join(app.getPath('userData'), 'claude-stato.json');
 
 export interface StatoCollegamentoSalvato {
   collegato: boolean;
-  modalita?: 'chiave' | 'account';
+  modalita?: 'chiave' | 'account' | 'licenza';
   messaggio?: string;
   verificatoIl: string;
 }

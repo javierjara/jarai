@@ -18,8 +18,17 @@ interface ImportoCartella {
 
 interface EsitoVerifica {
   collegato: boolean;
-  modalita?: 'chiave' | 'account';
+  modalita?: 'chiave' | 'account' | 'licenza';
   messaggio?: string;
+}
+
+interface StatoLicenza {
+  valida: boolean;
+  messaggio?: string;
+  studio?: string;
+  piano?: string;
+  domandeUsate?: number;
+  domandeMese?: number;
 }
 
 interface StatoCollegamentoSalvato extends EsitoVerifica {
@@ -82,18 +91,6 @@ type EventoAggiornamento =
   | { tipo: 'scaricato'; versione: string }
   | { tipo: 'errore'; messaggio: string };
 
-interface FinestraUtilizzo {
-  percentuale: number | null;
-  siAzzeraIl: string | null;
-}
-interface UtilizzoAbbonamento {
-  disponibile: boolean;
-  tipoAbbonamento: string | null;
-  sessione: FinestraUtilizzo | null;
-  settimana: FinestraUtilizzo | null;
-  settimanaOpus: FinestraUtilizzo | null;
-}
-
 // Whitelist dei canali IPC (spec §2.3): nessun accesso generico a
 // ipcRenderer dal renderer. Gli argomenti sono validati con zod nel main
 // process (src/main/pratiche.ts, src/main/claudeIpc.ts) prima di toccare il
@@ -113,6 +110,8 @@ const jarai = {
     rimuoviChiave: (): Promise<void> => ipcRenderer.invoke('claude:rimuovi-chiave'),
     statoChiave: (): Promise<{ presente: boolean }> => ipcRenderer.invoke('claude:stato-chiave'),
     disconnetti: (): Promise<void> => ipcRenderer.invoke('claude:disconnetti'),
+    attivaLicenza: (licenza: string): Promise<StatoLicenza> => ipcRenderer.invoke('claude:attiva-licenza', licenza),
+    statoLicenza: (): Promise<StatoLicenza> => ipcRenderer.invoke('claude:stato-licenza'),
     invia: (payload: InvioPayload): Promise<void> => ipcRenderer.invoke('claude:invia', payload),
     ferma: (conversazioneId: string): Promise<void> => ipcRenderer.invoke('claude:ferma', conversazioneId),
     onEvento: (callback: (evento: EventoAgente) => void): (() => void) => {
@@ -131,7 +130,6 @@ const jarai = {
     },
 
     uso: (): Promise<RiepilogoUso> => ipcRenderer.invoke('claude:uso'),
-    usoAbbonamento: (): Promise<UtilizzoAbbonamento | null> => ipcRenderer.invoke('claude:uso-abbonamento'),
   },
 
   dati: {
