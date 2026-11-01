@@ -129,13 +129,49 @@ export default function Settings({ studio, onSalvaStudio }: Props) {
     void window.jarai.aggiornamenti.scarica();
   }
 
+  // Integrazione DeJure (src/main/dejure.ts): disattivata finché l'avvocato
+  // non la collega con le proprie credenziali e accetta l'avvertenza. La
+  // password non resta mai nello stato del renderer dopo il collegamento.
+  type StatoDejure = Awaited<ReturnType<typeof window.jarai.dejure.stato>>;
+  const [dejure, setDejure] = useState<StatoDejure | null>(null);
+  const [dejureUtente, setDejureUtente] = useState('');
+  const [dejurePassword, setDejurePassword] = useState('');
+  const [dejureAvvertenza, setDejureAvvertenza] = useState(false);
+  const [dejureCollegando, setDejureCollegando] = useState(false);
+  const [dejureErrore, setDejureErrore] = useState<string | null>(null);
+
+  useEffect(() => {
+    void window.jarai.dejure.stato().then(setDejure);
+  }, []);
+
+  async function collegaDejure() {
+    if (!dejureUtente.trim() || !dejurePassword || !dejureAvvertenza) return;
+    setDejureCollegando(true);
+    setDejureErrore(null);
+    const esito = await window.jarai.dejure.collega(dejureUtente.trim(), dejurePassword);
+    setDejureCollegando(false);
+    if (esito.ok) {
+      setDejure(esito.stato);
+      setDejurePassword('');
+      setDejureAvvertenza(false);
+    } else {
+      setDejureErrore(esito.errore);
+    }
+  }
+
+  async function scollegaDejure() {
+    await window.jarai.dejure.scollega();
+    setDejure({ attiva: false });
+    setDejureUtente('');
+  }
+
   return (
     <div className="content">
       <div className="content-inner">
         <div className="page-head">
           <div>
             <h1>Impostazioni</h1>
-            <p>Studio, collegamento JarAI e privacy</p>
+            <p>Studio, collegamento JarAI, integrazioni e privacy</p>
           </div>
         </div>
 
@@ -249,6 +285,107 @@ export default function Settings({ studio, onSalvaStudio }: Props) {
             </div>
           </div>
 
+
+          {/* Integrazioni */}
+          <div className="s-card">
+            <div className="s-card-head">
+              <div className="s-card-title">Integrazioni</div>
+              <div className="s-card-sub">Banche dati giuridiche che l'assistente può consultare per te.</div>
+            </div>
+            <div className="s-card-body">
+              <div className="s-row">
+                <div>
+                  <div className="s-label">DeJure</div>
+                  <div className="s-label-sub">{dejure?.attiva ? dejure.utente : 'Lefebvre Giuffrè'}</div>
+                </div>
+                <div className="api-key-row">
+                  <span
+                    className="dot"
+                    style={{ background: dejure === null ? 'var(--amber)' : dejure.attiva ? 'var(--sage)' : 'var(--faint)' }}
+                  />
+                  <span className="v">
+                    {dejure === null && 'Verifica…'}
+                    {dejure?.attiva === true && 'Collegato: l\'assistente può cercare giurisprudenza'}
+                    {dejure?.attiva === false && 'Non collegato'}
+                  </span>
+                </div>
+                <div>
+                  {dejure?.attiva && (
+                    <button className="btn danger" onClick={() => void scollegaDejure()}>
+                      Scollega
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {dejure?.attiva === false && (
+                <>
+                  <div className="s-row">
+                    <div className="s-label">Utente DeJure</div>
+                    <input
+                      className="s-input"
+                      value={dejureUtente}
+                      onChange={(e) => setDejureUtente(e.target.value)}
+                      placeholder="email o nome utente"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <div />
+                  </div>
+                  <div className="s-row">
+                    <div className="s-label">Password DeJure</div>
+                    <input
+                      className="s-input"
+                      type="password"
+                      value={dejurePassword}
+                      onChange={(e) => setDejurePassword(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && void collegaDejure()}
+                      autoComplete="off"
+                    />
+                    <div />
+                  </div>
+                  <div className="s-row">
+                    <div />
+                    <label className="dejure-avvertenza">
+                      <input
+                        type="checkbox"
+                        checked={dejureAvvertenza}
+                        onChange={(e) => setDejureAvvertenza(e.target.checked)}
+                      />
+                      <span>
+                        Ho letto e accetto: JarAI accede a DeJure con <strong>le mie credenziali</strong> e in modo automatico,
+                        per mio conto, e invia all'assistente Claude i testi consultati. Le condizioni di licenza di DeJure
+                        (art. 4.4) limitano l'uso dei contenuti alle esigenze professionali dell'abbonato e vietano di
+                        renderli accessibili a terzi o di crearne applicazioni derivate: verificare la compatibilità con il
+                        mio abbonamento è <strong>mia responsabilità</strong>, non di JarAI. Posso scollegare DeJure in
+                        qualsiasi momento.
+                      </span>
+                    </label>
+                    <button
+                      className="btn primary"
+                      onClick={() => void collegaDejure()}
+                      disabled={!dejureUtente.trim() || !dejurePassword || !dejureAvvertenza || dejureCollegando}
+                    >
+                      {dejureCollegando ? 'Accesso…' : 'Collega'}
+                    </button>
+                  </div>
+                  {dejureErrore && (
+                    <div className="s-row">
+                      <div />
+                      <div style={{ fontSize: 12.5, color: 'var(--oxblood)' }}>{dejureErrore}</div>
+                    </div>
+                  )}
+                  <div className="s-row">
+                    <div />
+                    <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                      Le credenziali restano su questo computer, cifrate dal sistema operativo. L'accesso viene verificato
+                      subito: può richiedere qualche secondo.
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
 
           {/* Trascrizione audio */}
           <div className="s-card">

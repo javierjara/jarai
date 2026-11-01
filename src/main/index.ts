@@ -6,8 +6,10 @@ import { registraAnteprimaDocumenti } from './documentPreview';
 import { registraCollegamentoClaude } from './claudeIpc';
 import { registraPersistenza } from './store';
 import { registraBozze } from './bozze';
+import { registraTrascrizione } from './trascrizione';
 import { registraAudioSetup } from './audioSetup';
 import { registraAggiornamenti } from './aggiornamenti';
+import { registraDejure } from './dejure';
 
 // Schema privilegiato per il player audio delle pratiche (spec §6.2): il
 // renderer, sandboxato e senza accesso al filesystem, non può puntare un
@@ -152,8 +154,10 @@ app.whenReady().then(() => {
   registraCollegamentoClaude(() => mainWindow);
   registraPersistenza();
   registraBozze(() => mainWindow);
+  registraTrascrizione(() => mainWindow);
   registraAudioSetup(() => mainWindow);
   registraAggiornamenti(() => mainWindow);
+  registraDejure();
 
   createWindow();
 

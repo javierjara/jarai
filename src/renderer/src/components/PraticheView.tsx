@@ -4,6 +4,13 @@ import { ChevronIcon, CloseIcon, FolderIcon, PauseIcon, PencilIcon, PlayIcon, Pl
 import ImportaCartellaModal, { type FilePendente } from './ImportaCartellaModal';
 import AnteprimaDocumento, { anteprimaSupportata } from './AnteprimaDocumento';
 
+// Stessa forma di AvanzamentoTrascrizione in src/main/trascrizione.ts.
+interface AvanzamentoTrascrizione {
+  fase: 'in-coda' | 'preparazione' | 'modello' | 'trascrizione';
+  progresso?: number;
+  durataSec?: number;
+}
+
 interface Props {
   pratiche: Pratica[];
   conversazioni: Conversazione[];
@@ -76,6 +83,16 @@ function fmtTempo(sec: number) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Deve combaciare con percorsoFileTrascrizione in src/main/trascrizione.ts:
+// il nome che avrà il file di trascrizione di questo audio, se esiste. Il
+// collegamento audio↔trascrizione si calcola così, cercando questo nome
+// nell'elenco documenti — niente campo nuovo da persistere, funziona anche
+// per le trascrizioni già fatte in passato via chat.
+function nomeTrascrizioneAttesa(nomeAudio: string): string {
+  const nomeBase = nomeAudio.replace(/\.[^.]+$/, '').replace(/[/\\:*?"<>|]/g, ' ').trim();
+  return `${nomeBase} — trascrizione.docx`;
 }
 
 // Player audio in stile WhatsApp: forma d'onda al posto della barra piatta.
@@ -334,6 +351,76 @@ export default function PraticheView({
 
   const pratica = pratiche.find((p) => p.id === selectedId) ?? null;
 
+  // Trascrizione diretta dalla lista documenti (spec §6.2): stesso motore
+  // che Claude usa in chat (trascriviAudio in src/main/trascrizione.ts),
+  // chiamato qui senza passare da una conversazione. Tenuta per percorso,
+  // non per id documento: l'evento di avanzamento dal main arriva con il
+  // percorso, e così più righe possono restare "in coda" insieme — la coda
+  // vera (una trascrizione alla volta) resta lato main come già oggi.
+  const [trascrizioniInCorso, setTrascrizioniInCorso] = useState<Record<string, AvanzamentoTrascrizione>>({});
+  const [trascrizioneErrore, setTrascrizioneErrore] = useState<Record<string, string>>({});
+
+  // Avanzamento dell'indice in background (src/main/indice.ts): a fine coda
+  // il main manda totale 0 e l'avviso sparisce.
+  const [indicizzazione, setIndicizzazione] = useState<{ totale: number; completati: number; corrente: string | null } | null>(null);
+  useEffect(() => {
+    return window.jarai.indice.onEvento((stato) => setIndicizzazione(stato.totale > 0 ? stato : null));
+  }, []);
+
+  useEffect(() => {
+    return window.jarai.trascrizione.onEvento(({ percorso, avanzamento }) => {
+      setTrascrizioniInCorso((prev) => ({ ...prev, [percorso]: avanzamento }));
+    });
+  }, []);
+
+  async function avviaTrascrizione(d: Documento, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!d.percorso || !pratica?.cartellaPercorso) return;
+    const percorso = d.percorso;
+    const cartellaPercorso = pratica.cartellaPercorso;
+    const praticaId = pratica.id;
+    setTrascrizioneErrore((prev) => {
+      const { [percorso]: _tolto, ...resto } = prev;
+      return resto;
+    });
+    setTrascrizioniInCorso((prev) => ({ ...prev, [percorso]: { fase: 'in-coda' } }));
+    try {
+      const esito = await window.jarai.trascrizione.avvia(percorso, cartellaPercorso, d.nome);
+      onImportaDocumenti(praticaId, [
+        {
+          id: crypto.randomUUID(),
+          nome: esito.nome,
+          tipo: 'DOCX',
+          data: esito.modificatoIl,
+          cartella: 'JarAI - Bozze',
+          dimensione: esito.dimensione,
+          percorso: esito.percorso,
+        },
+      ]);
+    } catch (err) {
+      console.error('[trascrizione] non riuscita', d.nome, err);
+      setTrascrizioneErrore((prev) => ({ ...prev, [percorso]: err instanceof Error ? err.message : 'Trascrizione non riuscita.' }));
+    } finally {
+      setTrascrizioniInCorso((prev) => {
+        const { [percorso]: _tolto, ...resto } = prev;
+        return resto;
+      });
+    }
+  }
+
+  function descrizioneFaseTrascrizione(a: AvanzamentoTrascrizione): string {
+    switch (a.fase) {
+      case 'in-coda':
+        return 'In attesa…';
+      case 'preparazione':
+        return 'Preparo…';
+      case 'modello':
+        return 'Carico il modello…';
+      case 'trascrizione':
+        return `Trascrizione ${Math.round((a.progresso ?? 0) * 100)}%`;
+    }
+  }
+
   // Rilegge la cartella già collegata alla pratica (mai un nuovo selettore:
   // il legame è 1:1, spec §5.3) per scoprire i file aggiunti nel frattempo.
   // Se la cartella non risponde più, segnala "non trovata" invece di un
@@ -427,6 +514,31 @@ export default function PraticheView({
     const caricando = attivo && audioCaricando;
     const inErrore = audioErroreId === d.id;
 
+    // Collegamento audio↔trascrizione (spec §6.2): calcolato per nome
+    // nell'elenco già caricato, non un campo salvato — funziona anche per
+    // le trascrizioni fatte in passato via chat, non solo per quelle nuove.
+    const trascrizioneEsistente = audio ? docsScoped.find((doc) => doc.nome === nomeTrascrizioneAttesa(d.nome)) : undefined;
+    const trascrizioneAvanzamento = audio && d.percorso ? trascrizioniInCorso[d.percorso] : undefined;
+    const trascrizioneErroreMsg = audio && d.percorso ? trascrizioneErrore[d.percorso] : undefined;
+    const azioneTrascrizione = !audio ? null : trascrizioneAvanzamento ? (
+      <span className="trascrizione-stato">🎙 {descrizioneFaseTrascrizione(trascrizioneAvanzamento)}</span>
+    ) : trascrizioneEsistente ? (
+      <button
+        className="trascrizione-chip"
+        title="Apri la trascrizione"
+        onClick={(e) => { e.stopPropagation(); setPreviewDoc(trascrizioneEsistente); }}
+      >
+        📝 Trascrizione
+      </button>
+    ) : pratica && d.percorso ? (
+      <>
+        {trascrizioneErroreMsg && <span className="audio-errore">{trascrizioneErroreMsg}</span>}
+        <button className="audio-errore-link" onClick={(e) => void avviaTrascrizione(d, e)}>
+          Trascrivi
+        </button>
+      </>
+    ) : null;
+
     return (
       <div key={d.id} className="lib-file-row lib-file-row-clickable" onClick={() => setPreviewDoc(d)} title="Clicca per aprire">
         <div className="lib-file-thumb">
@@ -479,6 +591,7 @@ export default function PraticheView({
                 <span className="audio-time">
                   {fmtTempo(audioTempo)} / {fmtTempo(audioDurata)}
                 </span>
+                {azioneTrascrizione}
                 <button className="audio-velocita" onClick={cambiaVelocitaAudio} title="Velocità di riproduzione">
                   {audioVelocita}×
                 </button>
@@ -514,6 +627,12 @@ export default function PraticheView({
                 </>
               ) : null}
               <span>{fmtData(d.data)}</span>
+              {azioneTrascrizione && (
+                <>
+                  <span className="pip" />
+                  {azioneTrascrizione}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -674,6 +793,28 @@ export default function PraticheView({
           )}
         </div>
 
+        {indicizzazione && (
+          <div className="indice-stato">
+            <div className="indice-stato-testo">
+              Sto preparando i documenti per la lettura: {indicizzazione.completati} di {indicizzazione.totale}
+              {indicizzazione.corrente ? ` · ${indicizzazione.corrente}` : ''}
+            </div>
+            <div
+              className="lavoro-barra"
+              role="progressbar"
+              aria-label="Preparazione dei documenti"
+              aria-valuemin={0}
+              aria-valuemax={indicizzazione.totale}
+              aria-valuenow={indicizzazione.completati}
+            >
+              <div
+                className="lavoro-barra-riempimento"
+                style={{ width: `${Math.round((indicizzazione.completati / indicizzazione.totale) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         {pratica && !pratica.cartellaTrovata && (
           <div className="privacy-card" style={{ margin: '0 24px 16px' }}>
             <div className="privacy-icn">
@@ -785,8 +926,8 @@ export default function PraticheView({
               <AnteprimaDocumento key={previewDoc.id} doc={previewDoc} />
             ) : (
               <div className="note">
-                JarAI può già leggere questo documento in conversazione (PDF, DOCX, DOC, RTF, EML, MSG, P7M, immagini con OCR). L'anteprima visiva
-                pagina per pagina è disponibile per PDF e immagini; per questo formato JarAI legge comunque il testo in conversazione.
+                JarAI può già leggere questo documento in conversazione (PDF, DOCX, DOC, RTF, EML, MSG, P7M, immagini con OCR). L'anteprima qui nel
+                pannello è disponibile per PDF, DOCX e immagini; per questo formato JarAI legge comunque il testo in conversazione.
               </div>
             )}
             <div className="foot">

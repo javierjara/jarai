@@ -39,6 +39,7 @@ interface InvioPayload {
   conversazioneId: string;
   testo: string;
   qualita: 'Standard' | 'Massima';
+  praticaId?: string;
   praticaNome?: string;
   documenti?: {
     nome: string;
@@ -56,6 +57,26 @@ type EventoAgente =
   | { tipo: 'errore'; conversazioneId: string; messaggio: string }
   | { tipo: 'bozza'; conversazioneId: string; titolo: string; contenuto: string }
   | { tipo: 'lavori'; conversazioneId: string; lavori: LavoroDocumento[] };
+
+// Stessa forma di AvanzamentoTrascrizione in src/main/trascrizione.ts.
+interface AvanzamentoTrascrizione {
+  fase: 'in-coda' | 'preparazione' | 'modello' | 'trascrizione';
+  progresso?: number;
+  durataSec?: number;
+}
+
+interface EventoTrascrizione {
+  percorso: string;
+  avanzamento: AvanzamentoTrascrizione;
+}
+
+interface EsitoTrascrizione {
+  testo: string;
+  percorso: string;
+  nome: string;
+  dimensione: number;
+  modificatoIl: string;
+}
 
 // Stessa forma di LavoroDocumento in src/main/documentTools.ts.
 interface LavoroDocumento {
@@ -83,6 +104,19 @@ interface RiepilogoUso {
   ultime: { ts: string; modello: string; costoUsd: number }[];
 }
 
+interface StatoIndicizzazione {
+  totale: number;
+  completati: number;
+  corrente: string | null;
+}
+
+// Stessa forma di StatoDejure in src/main/dejure.ts.
+interface StatoDejure {
+  attiva: boolean;
+  utente?: string;
+  avvertenzaAccettataIl?: string;
+}
+
 type EventoAggiornamento =
   | { tipo: 'controllo' }
   | { tipo: 'disponibile'; versione: string }
@@ -102,12 +136,14 @@ const jarai = {
   verificaCartelle: (percorsi: string[]): Promise<Record<string, boolean>> => ipcRenderer.invoke('pratiche:verifica-cartelle', percorsi),
   apriNellaCartella: (percorso: string): Promise<void> => ipcRenderer.invoke('pratiche:apri-nella-cartella', percorso),
   apriConAppPredefinita: (percorso: string): Promise<void> => ipcRenderer.invoke('pratiche:apri-con-app-predefinita', percorso),
+  eliminaMemoria: (praticaId: string): Promise<void> => ipcRenderer.invoke('pratiche:elimina-memoria', praticaId),
 
   documenti: {
     anteprimaPdf: (percorso: string, pagina: number): Promise<{ dati: Uint8Array; larghezza: number; altezza: number; totalePagine: number }> =>
       ipcRenderer.invoke('documenti:anteprima-pdf', { percorso, pagina }),
     anteprimaImmagine: (percorso: string): Promise<{ dati: Uint8Array; mime: string }> =>
       ipcRenderer.invoke('documenti:anteprima-immagine', percorso),
+    anteprimaDocx: (percorso: string): Promise<{ testo: string }> => ipcRenderer.invoke('documenti:anteprima-docx', percorso),
   },
 
   claude: {
@@ -155,6 +191,26 @@ const jarai = {
       ipcRenderer.invoke('bozze:salva-pdf', { titolo, contenuto }),
   },
 
+  trascrizione: {
+    avvia: (percorso: string, cartellaPratica: string, nomeFile: string): Promise<EsitoTrascrizione> =>
+      ipcRenderer.invoke('trascrizione:avvia', { percorso, cartellaPratica, nomeFile }),
+    onEvento: (callback: (evento: EventoTrascrizione) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, evento: EventoTrascrizione) => callback(evento);
+      ipcRenderer.on('trascrizione:evento', listener);
+      return () => ipcRenderer.removeListener('trascrizione:evento', listener);
+    },
+  },
+
+  // Indice dei documenti in background (src/main/indice.ts): solo lettura
+  // dell'avanzamento, l'indicizzazione la avvia il main da solo.
+  indice: {
+    onEvento: (callback: (stato: StatoIndicizzazione) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, stato: StatoIndicizzazione) => callback(stato);
+      ipcRenderer.on('indice:evento', listener);
+      return () => ipcRenderer.removeListener('indice:evento', listener);
+    },
+  },
+
   audio: {
     stato: (): Promise<{ disponibile: boolean; installazioneAutomaticaDisponibile: boolean }> =>
       ipcRenderer.invoke('audio:stato'),
@@ -164,6 +220,15 @@ const jarai = {
       ipcRenderer.on('audio:progresso', listener);
       return () => ipcRenderer.removeListener('audio:progresso', listener);
     },
+  },
+
+  // Integrazione DeJure (src/main/dejure.ts): la password passa una sola
+  // volta, al collegamento, e da lì resta cifrata nel main process.
+  dejure: {
+    stato: (): Promise<StatoDejure> => ipcRenderer.invoke('dejure:stato'),
+    collega: (utente: string, password: string): Promise<{ ok: true; stato: StatoDejure } | { ok: false; errore: string }> =>
+      ipcRenderer.invoke('dejure:collega', { utente, password, avvertenzaAccettata: true }),
+    scollega: (): Promise<void> => ipcRenderer.invoke('dejure:scollega'),
   },
 
   aggiornamenti: {

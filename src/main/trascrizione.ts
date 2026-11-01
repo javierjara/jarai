@@ -1,7 +1,8 @@
-import { app } from 'electron';
+import { app, ipcMain, type BrowserWindow } from 'electron';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { basename, extname, join } from 'node:path';
+import { z } from 'zod';
 import { generaDocxBuffer } from './bozze';
 import { ambienteConPath, pathCompletoWindows } from './pathSistema';
 import { eseguibilePythonAttivo } from './pythonRuntime';
@@ -291,4 +292,37 @@ export async function trascriviAudio(
   }
 
   return testo;
+}
+
+const trascriviSchema = z.object({
+  percorso: z.string().min(1),
+  cartellaPratica: z.string().min(1),
+  nomeFile: z.string().min(1),
+});
+
+// Punto d'ingresso diretto da "Le mie pratiche" (spec §6.2): stesso motore
+// di sopra, ma chiamato senza passare da una conversazione con Claude — un
+// pulsante "Trascrivi" sulla riga del documento audio, invece di doverlo
+// chiedere in chat. cartellaPratica qui è sempre obbligatoria (a differenza
+// di trascriviAudio, che la accetta nullable per il caso "letta da Claude
+// ma senza sapere la cartella della pratica"): da un pulsante nella lista
+// pratiche la cartella è sempre nota, e senza di essa non c'è un file da
+// restituire al renderer.
+export function registraTrascrizione(getWindow: () => BrowserWindow | null): void {
+  ipcMain.handle('trascrizione:avvia', async (_event, input: unknown) => {
+    const { percorso, cartellaPratica, nomeFile } = trascriviSchema.parse(input);
+    const invia = (avanzamento: AvanzamentoTrascrizione) => {
+      getWindow()?.webContents.send('trascrizione:evento', { percorso, avanzamento });
+    };
+    const testo = await trascriviAudio(percorso, cartellaPratica, nomeFile, invia);
+    const percorsoFile = percorsoFileTrascrizione(cartellaPratica, nomeFile);
+    const stat = await fs.stat(percorsoFile);
+    return {
+      testo,
+      percorso: percorsoFile,
+      nome: basename(percorsoFile),
+      dimensione: stat.size,
+      modificatoIl: stat.mtime.toISOString(),
+    };
+  });
 }

@@ -12,7 +12,8 @@ l'altro. Fase 3 (Pratiche reali) **completa**: la pratica nasce già legata
 1:1 a una cartella sul disco, con rilevamento di "Cartella non trovata" e
 "Trova di nuovo" dopo uno spostamento; lettura reale estesa a DOC, RTF, MSG,
 P7M, OCR delle immagini **e OCR delle pagine scansionate nei PDF** (fino a
-30 pagine scansionate per documento, con avviso se ce ne sono di più).
+1000 pagine scansionate per documento), con **indice in background** di tutti
+i documenti appena importati, zip compresi.
 Anticipato dalla Fase 4 (Motore legale): Claude legge davvero i documenti
 della pratica selezionata. Vedi spec §12 per il piano completo.
 
@@ -25,8 +26,8 @@ Cosa c'è:
   suoi documenti** (PDF con testo diviso per pagina, DOCX, DOC, RTF, TXT,
   EML, MSG, P7M — con estrazione del contenuto firmato — immagini lette con
   OCR, **e audio trascritto** — telefonate, deposizioni registrate) tramite
-  due strumenti MCP interni — `elenca_documenti` e `leggi_documento` (spec
-  §6.2) — senza mai poter uscire dall'elenco dei documenti già indicizzati
+  tre strumenti MCP interni — `elenca_documenti`, `leggi_documento` e
+  `cerca_nei_documenti` (spec §6.2) — senza mai poter uscire dall'elenco dei documenti già indicizzati
   della pratica. Nessun altro strumento nativo (Bash/Write/Edit) è concesso.
   Può anche **proporre bozze vere** (`crea_bozza`, spec §6.2): quando chiedi
   di redigere un atto compare un "📄 documento pronto" nella chat, che apre
@@ -68,28 +69,76 @@ DOC, RTF, TXT, EML, MSG, P7M, immagini (JPG/PNG/GIF/WebP, con OCR
 italiano+inglese via `tesseract.js`) e audio (MP3, M4A, WAV, OGG, AAC, FLAC,
 WMA) sono leggibili automaticamente. Nei PDF, le pagine senza un layer di
 testo (sotto i 20 caratteri) vengono riconosciute come scansionate e lette
-con lo stesso OCR — fino a 30 pagine scansionate per documento, con un
-avviso nel testo se il fascicolo ne ha di più (un tetto voluto: l'OCR costa
-qualche secondo a pagina e un fascicolo scansionato può averne centinaia).
+con lo stesso OCR, a blocchi di 10 pagine per contenere la memoria (tetto di
+protezione a 1000 pagine scansionate per documento).
 L'OCR scarica i modelli lingua al primo uso (rete richiesta una volta sola,
-poi restano in cache nella cartella dati). Il testo di ogni documento è
-troncato a 60.000 caratteri e letto una sola volta per conversazione (come
-in legis). Nessuna ricerca
-full-text ancora (`cerca_nei_documenti` di spec §6.2 non c'è): il modello
-deve sapere quale documento leggere, di solito dopo un `elenca_documenti`.
+poi restano in cache nella cartella dati).
+
+**Indice in background (`src/main/indice.ts`):** appena una cartella viene
+importata o aggiornata, tutti i documenti leggibili (audio esclusi) vengono
+estratti uno alla volta e il testo resta in cache in `indice-testi/` nella
+cartella dati, con una chiave da percorso + dimensione + data di modifica (un
+file cambiato si reindicizza da solo). La vista pratiche mostra "Sto
+preparando i documenti per la lettura: N di M". Quando Claude chiede un
+documento il testo è già pronto; se l'indice lo sta ancora estraendo, la
+lettura si aggancia allo stesso lavoro. Anche l'invio di una domanda mette in
+coda i documenti non ancora indicizzati (pratiche importate prima dell'indice).
+
+**Lettura completa della pratica:** il prompt chiede di leggere *tutti* i
+documenti leggibili alla prima domanda e di dichiarare per nome quelli che non
+si sono potuti leggere. Niente più troncamento: i documenti oltre 60.000
+caratteri si leggono a parti (`leggi_documento` con `parte`, "Parte N di M").
+Le letture ripetute nella stessa conversazione restano deduplicate per parte,
+ma con `rileggi: true` il modello può rileggere un testo uscito dal contesto.
+`maxTurns` cresce con il numero di documenti (20 + 3 per documento, fino a
+300). `cerca_nei_documenti` cerca una parola o frase in tutta la pratica
+(senza distinguere maiuscole e accenti) e restituisce i brani con documento e
+pagina.
+
+**Strumenti ed efficienza (token):** `elenca_documenti` mostra per ogni
+documento pagine, peso stimato in token e numero di parti, così Claude
+pianifica le letture. `leggi_documento` accetta `pagine` ("12" o "12-15")
+per verificare un passaggio senza rileggere una parte intera.
+`cerca_nei_documenti` accetta più termini in una sola chiamata, con tetti per
+termine e per documento. `estrai_date` restituisce in ordine cronologico tutte
+le date della pratica (numeriche o per esteso) con documento, pagina e
+contesto: la base per cronologie e scadenze, calcolata in locale a costo zero.
+Il prompt chiede letture in parallelo (meno passaggi, quindi meno contesto
+rimandato), effort `medium` per Standard e `high` per Massima, e con la
+licenza JarAI un tetto di spesa per domanda (`maxBudgetUsd`: $8 Standard, $20
+Massima). Turni o tetto esauriti mostrano un messaggio chiaro all'avvocato,
+non più "Non riesco a raggiungere Claude".
+
+**Memoria della pratica** (`src/main/memoriaPratica.ts`, strumenti
+`leggi_memoria_pratica` e `salva_in_memoria_pratica`): dopo aver letto per
+intero un documento Claude ne salva una scheda (tipo di atto, parti, date,
+importi, punti chiave con le pagine), più i fatti stabili della pratica. La
+conversazione successiva parte dalle schede e legge per intero solo i
+documenti senza scheda o modificati (impronta dimensione + data di modifica),
+tornando sul testo per i dettagli. Una scheda si accetta solo se in quella
+conversazione il documento è stato letto davvero tutto, parte per parte. La
+memoria resta sul computer (`memoria-pratiche/` nella cartella dati di JarAI)
+e si cancella insieme alla pratica.
+
+**Prompt di sistema:** con una chiave API (dello studio o dietro la licenza
+JarAI) si usa solo il prompt legale più la data di oggi, senza il preset
+`claude_code` (migliaia di token di istruzioni per programmare a ogni
+passaggio). Con l'accesso tramite account Claude il preset resta.
+
+**Modelli:** Standard = `claude-sonnet-5`, Massima = `claude-opus-5-5`
+(meno caro di Opus 5). Il proxy deve avere `claude-opus-5-5` in
+`ALLOWED_MODELS` **prima** di distribuire questa versione dell'app.
 
 **File dentro uno ZIP** (fascicoli ricevuti dal tribunale o dalla
-controparte, spesso zippati): quando lo scanner cartelle
-(`src/main/pratiche.ts`) trova uno zip, chiede conferma ("Vuoi estrarlo?" —
-scrivere su disco è sempre un'azione da confermare, spec §7) e in caso di sì
-lo estrae in una cartella accanto all'originale, con lo stesso nome senza
-`.zip` — esattamente come un doppio clic in Finder — **poi elimina lo zip
-originale**, dichiarato nel testo della conferma prima di procedere. Da lì i
-file estratti vengono indicizzati come qualunque altro documento della
-pratica, quindi funzionano anche audio e P7M dentro uno zip. Se la cartella
-di destinazione esiste già (zip già estratto ed eliminato in un giro
-precedente) non richiede conferma una seconda volta. Un solo livello: uno
-zip dentro un altro zip non viene proposto in automatico.
+controparte, spesso zippati): lo scanner cartelle (`src/main/pratiche.ts`)
+estrae sempre lo zip, senza chiedere, in `zip-estratti/` nella cartella dati
+di JarAI — mai nella cartella dell'avvocato, e lo zip originale non viene
+toccato. I documenti estratti compaiono come "Fascicolo.zip/Atti" e si
+indicizzano come tutti gli altri; gli zip dentro uno zip vengono letti allo
+stesso modo, a ogni livello. Uno zip già estratto (stesso percorso, dimensione
+e data) non si riestrae. Gli audio dentro uno zip si trascrivono, ma la
+trascrizione .docx non viene salvata in "JarAI - Bozze" perché non hanno una
+cartella della pratica accanto.
 
 **Trascrizione audio — richiede Python (spec §12, Fase 3):** a differenza
 degli altri formati, l'audio non usa una libreria JavaScript in-process ma un
@@ -175,7 +224,7 @@ esistente invece di crearne una nuova.
 Fase 3 (Pratiche reali) è completa — vedi "Stato attuale" sopra.
 
 1. **Motore legale** — fatto: `elenca_documenti`, `leggi_documento`,
-   `crea_bozza` + salvataggio Word. Restano `cerca_nei_documenti`,
+   `cerca_nei_documenti`, `crea_bozza` + salvataggio Word. Restano
    `jarai-ricerca` (norme/giurisprudenza), `esporta_pdf`, assistenti
    specialisti, procedure, e la traduzione completa delle attività in chat
    (oggi solo "sto leggendo/guardando i documenti/preparando la bozza",

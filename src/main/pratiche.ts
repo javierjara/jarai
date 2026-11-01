@@ -1,11 +1,14 @@
 import { dialog, ipcMain, protocol, shell, type BrowserWindow } from 'electron';
 import { createReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
-import { extname, basename, dirname, join, relative } from 'node:path';
+import { createHash } from 'node:crypto';
+import { extname, basename, join, relative, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { CARTELLA_PRINCIPALE, ESTENSIONI_AUDIO, ESTENSIONI_LEGGIBILI } from './formatiDocumenti';
-import { estraiZip } from './zip';
+import { CARTELLA_ZIP_ESTRATTI, estraiZip } from './zip';
+import { indicizzaInBackground } from './indice';
+import { eliminaMemoria } from './memoriaPratica';
 
 export { CARTELLA_PRINCIPALE };
 
@@ -31,61 +34,64 @@ async function esisteCartella(percorso: string): Promise<boolean> {
   }
 }
 
-// Zip trovato durante l'importazione: chiede conferma prima di estrarlo
-// (spec §7, livello "Conferma" — scrivere su disco non è mai automatico) e
-// lo estrae accanto all'originale, come farebbe Finder. Se una cartella con
-// lo stesso nome esiste già, si assume già estratto in precedenza e non
-// richiede conferma una seconda volta a ogni "Aggiorna dalla cartella".
-async function gestisciZip(percorsoZip: string, nomeZip: string, win: BrowserWindow | null): Promise<string | null> {
-  const destDir = join(dirname(percorsoZip), basename(nomeZip, '.zip'));
-  if (await esisteCartella(destDir)) return destDir;
-
-  const opzioni = {
-    type: 'question' as const,
-    buttons: ['Estrai', 'Ignora'],
-    defaultId: 0,
-    cancelId: 1,
-    message: `È stato trovato l'archivio «${nomeZip}»`,
-    detail:
-      'Vuoi estrarlo per includere i documenti al suo interno nella pratica? Viene creata una cartella accanto allo zip con lo stesso nome, poi lo zip originale viene eliminato.',
-  };
-  const risposta = win ? await dialog.showMessageBox(win, opzioni) : await dialog.showMessageBox(opzioni);
-  if (risposta.response !== 0) return null;
-
-  try {
-    await estraiZip(percorsoZip, destDir);
-  } catch {
-    return null; // Zip corrotto o protetto da password: viene saltato, non blocca il resto della pratica.
+// Zip trovato nella pratica (un fascicolo zippato dal tribunale o dalla
+// controparte): il contenuto viene estratto nella cartella dati di JarAI, non
+// in quella dell'avvocato, così si indicizza sempre senza chiedere conferma
+// e senza toccare né cancellare l'archivio originale (spec §6.2: nessuno
+// strumento modifica i file dell'avvocato). La cartella di estrazione
+// dipende da percorso, dimensione e data dello zip: un archivio già visto
+// non si riestrae, uno modificato sì. Gli zip dentro lo zip seguono la
+// stessa strada, perché il contenuto estratto si rilegge con la stessa
+// funzione ricorsiva.
+async function leggiZip(percorsoZip: string, etichetta: string): Promise<FileTrovato[]> {
+  const stat = await fs.stat(percorsoZip);
+  const chiave = createHash('sha1').update(`${percorsoZip}|${stat.size}|${stat.mtimeMs}`).digest('hex');
+  const destDir = join(CARTELLA_ZIP_ESTRATTI(), chiave);
+  if (!(await esisteCartella(destDir))) {
+    const temporanea = `${destDir}.parziale`;
+    await fs.rm(temporanea, { recursive: true, force: true });
+    try {
+      await estraiZip(percorsoZip, temporanea);
+      // Rinomina solo a estrazione finita: uno zip interrotto a metà (app
+      // chiusa) non lascia una cartella incompleta scambiata per buona.
+      await fs.rename(temporanea, destDir);
+    } catch {
+      await fs.rm(temporanea, { recursive: true, force: true }).catch(() => undefined);
+      return []; // Zip corrotto o protetto da password: viene saltato, non blocca il resto della pratica.
+    }
   }
-
-  // Lo zip originale viene rimosso solo dopo un'estrazione riuscita — se
-  // l'eliminazione fallisce (permessi...) i documenti restano comunque
-  // utilizzabili dalla cartella appena creata, non è un errore bloccante.
-  await fs.unlink(percorsoZip).catch(() => undefined);
-  return destDir;
+  return leggiCartellaRicorsiva(destDir, destDir, etichetta);
 }
 
-async function leggiCartellaRicorsiva(dirPath: string, baseDir: string, win: BrowserWindow | null): Promise<FileTrovato[]> {
+// `prefisso` è il nome mostrato dello zip che contiene la cartella (per
+// esempio "Fascicolo.zip"), così i suoi documenti compaiono come
+// "Fascicolo.zip/Atti" invece del percorso interno della cache.
+async function leggiCartellaRicorsiva(dirPath: string, baseDir: string, prefisso?: string): Promise<FileTrovato[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const risultati: FileTrovato[] = [];
 
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
+    // "__MACOSX" è la cartella di metadati che Finder aggiunge agli zip.
+    if (entry.name.startsWith('.') || entry.name === '__MACOSX') continue;
     const fullPath = join(dirPath, entry.name);
 
     if (entry.isDirectory()) {
-      risultati.push(...(await leggiCartellaRicorsiva(fullPath, baseDir, win)));
+      risultati.push(...(await leggiCartellaRicorsiva(fullPath, baseDir, prefisso)));
       continue;
     }
     if (!entry.isFile()) continue;
 
     const ext = extname(entry.name).slice(1).toLowerCase();
-    const rel = relative(baseDir, dirPath);
-    const cartella = rel === '' ? CARTELLA_PRINCIPALE : rel;
+    const relativa = relative(baseDir, dirPath).split(sep).join('/');
+    const cartella = prefisso
+      ? [prefisso, relativa].filter(Boolean).join('/')
+      : relativa === ''
+        ? CARTELLA_PRINCIPALE
+        : relativa;
 
     if (ext === 'zip') {
-      const destDir = await gestisciZip(fullPath, entry.name, win);
-      if (destDir) risultati.push(...(await leggiCartellaRicorsiva(destDir, baseDir, win)));
+      const etichetta = [cartella === CARTELLA_PRINCIPALE ? '' : cartella, entry.name].filter(Boolean).join('/');
+      risultati.push(...(await leggiZip(fullPath, etichetta).catch(() => [])));
       continue;
     }
 
@@ -107,6 +113,13 @@ async function leggiCartellaRicorsiva(dirPath: string, baseDir: string, win: Bro
   }
 
   return risultati;
+}
+
+// Appena una cartella è stata letta, tutti i suoi documenti partono verso
+// l'indice in background (indice.ts): quando l'avvocato fa la prima domanda
+// il testo è già pronto, OCR compreso.
+function avviaIndicizzazione(file: FileTrovato[]): void {
+  indicizzaInBackground(file.map((f) => ({ nome: f.nome, percorso: f.percorso, cartella: f.cartella, tipo: f.estensione })));
 }
 
 const percorsoSchema = z.string().min(1);
@@ -195,6 +208,11 @@ export function registraProtocolloAudio(): void {
 }
 
 export function registraGestionePratiche(getWindow: () => BrowserWindow | null): void {
+  // La memoria di una pratica eliminata non deve restare sul computer.
+  ipcMain.handle('pratiche:elimina-memoria', async (_event, idInput: unknown) => {
+    await eliminaMemoria(z.string().min(1).parse(idInput));
+  });
+
   ipcMain.handle('pratiche:importa-cartella', async () => {
     const win = getWindow();
     const result = win
@@ -204,7 +222,8 @@ export function registraGestionePratiche(getWindow: () => BrowserWindow | null):
 
     const cartellaPercorso = result.filePaths[0];
     const cartellaNome = basename(cartellaPercorso);
-    const file = await leggiCartellaRicorsiva(cartellaPercorso, cartellaPercorso, win);
+    const file = await leggiCartellaRicorsiva(cartellaPercorso, cartellaPercorso);
+    avviaIndicizzazione(file);
 
     return { cartellaPercorso, cartellaNome, file };
   });
@@ -216,7 +235,8 @@ export function registraGestionePratiche(getWindow: () => BrowserWindow | null):
   ipcMain.handle('pratiche:scansiona-cartella', async (_event, percorsoInput: unknown) => {
     const cartellaPercorso = percorsoSchema.parse(percorsoInput);
     const cartellaNome = basename(cartellaPercorso);
-    const file = await leggiCartellaRicorsiva(cartellaPercorso, cartellaPercorso, getWindow());
+    const file = await leggiCartellaRicorsiva(cartellaPercorso, cartellaPercorso);
+    avviaIndicizzazione(file);
     return { cartellaPercorso, cartellaNome, file };
   });
 

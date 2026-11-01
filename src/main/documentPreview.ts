@@ -1,14 +1,18 @@
 import { ipcMain } from 'electron';
 import { promises as fs } from 'node:fs';
 import { extname } from 'node:path';
+import mammoth from 'mammoth';
 import { z } from 'zod';
 import { ESTENSIONI_IMMAGINE } from './formatiDocumenti';
 
-// Anteprima visiva dei documenti in "Le mie pratiche" (spec §5.6): solo PDF
-// e immagini, gli unici due formati dove si può mostrare una pagina così
-// com'è senza prima convertirla in qualcos'altro. Per gli altri formati
-// (DOCX, DOC, RTF, EML, MSG, P7M, audio) il pannello resta con la nota
-// testuale di sempre — JarAI li legge comunque in conversazione.
+// Anteprima visiva dei documenti in "Le mie pratiche" (spec §5.6): PDF e
+// immagini mostrano una pagina così com'è; i DOCX (in particolare le
+// trascrizioni audio, spec §6.2 — l'avvocato deve poter leggere il testo
+// aprendo il collegamento dalla riga dell'audio, non solo saperlo leggibile
+// in chat) mostrano il testo estratto con la stessa libreria già usata per
+// farlo leggere a Claude (documentTools.ts). Per gli altri formati (DOC,
+// RTF, EML, MSG, P7M, audio) il pannello resta con la nota testuale di
+// sempre — JarAI li legge comunque in conversazione.
 //
 // A differenza dell'audio (protocollo dedicato "jarai-media://", serve il
 // supporto a "Range" per file da decine di MB) una singola pagina PNG è
@@ -54,5 +58,13 @@ export function registraAnteprimaDocumenti(): void {
     if (!ESTENSIONI_IMMAGINE.has(ext)) throw new Error('Formato immagine non supportato.');
     const dati = await fs.readFile(percorso);
     return { dati, mime: MIME_IMMAGINE[ext] ?? 'application/octet-stream' };
+  });
+
+  ipcMain.handle('documenti:anteprima-docx', async (_event, input: unknown) => {
+    const percorso = percorsoSchema.parse(input);
+    if (extname(percorso).slice(1).toLowerCase() !== 'docx') throw new Error('Non è un DOCX.');
+    const dati = await fs.readFile(percorso);
+    const risultato = await mammoth.extractRawText({ buffer: dati });
+    return { testo: risultato.value };
   });
 }

@@ -147,6 +147,7 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
       conversazioneId: conversazioneIdRef.current,
       testo,
       qualita,
+      praticaId: pratica?.id,
       praticaNome: pratica?.nome,
       documenti: documentiPratica.map((d) => ({ nome: d.nome, percorso: d.percorso, cartella: d.cartella, tipo: d.tipo, pagine: d.pagine })),
     });

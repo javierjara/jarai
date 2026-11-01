@@ -19,6 +19,7 @@ const invioSchema = z.object({
   conversazioneId: z.string().min(1),
   testo: z.string().min(1),
   qualita: z.enum(['Standard', 'Massima']),
+  praticaId: z.string().min(1).optional(),
   praticaNome: z.string().optional(),
   documenti: z.array(documentoRifSchema).optional(),
 });

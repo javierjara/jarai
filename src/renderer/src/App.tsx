@@ -176,6 +176,7 @@ export default function App() {
   }
 
   function eliminaPratica(id: string) {
+    void window.jarai.eliminaMemoria(id);
     setPratiche((prev) => prev.filter((p) => p.id !== id));
     setConversazioni((prev) => prev.filter((c) => c.praticaId !== id));
     setDocumenti((prev) => {

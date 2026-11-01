@@ -1,26 +1,29 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { app } from 'electron';
-import { promises as fs } from 'node:fs';
-import { dirname, extname, join } from 'node:path';
-import mammoth from 'mammoth';
-import WordExtractor from 'word-extractor';
-import MsgReader from '@kenjiuno/msgreader';
-import forge from 'node-forge';
-import Tesseract from 'tesseract.js';
-import { trascriviAudio, type AvanzamentoTrascrizione } from './trascrizione';
-import { CARTELLA_PRINCIPALE, ESTENSIONI_AUDIO, ESTENSIONI_IMMAGINE, ESTENSIONI_LEGGIBILI } from './formatiDocumenti';
+import { extname } from 'node:path';
+import { ESTENSIONI_AUDIO } from './formatiDocumenti';
+import type { AvanzamentoTrascrizione } from './trascrizione';
+import type { DocumentoRif } from './estrazioneTesto';
+import {
+  cercaInTesto,
+  dividiInParti,
+  estraiPagine,
+  indicizzabile,
+  numeroPagine,
+  stimaToken,
+  testoDocumento,
+  testoSeIndicizzato,
+  trovaDate,
+  type DataTrovata,
+  type Risultato,
+} from './indice';
+import { improntaFile, leggiMemoria, modificaMemoria, MAX_CARATTERI_FATTO, MAX_CARATTERI_SCHEDA, MAX_FATTI } from './memoriaPratica';
+
+export type { DocumentoRif };
 
 // Strumenti jarai-documenti (spec §6.2): solo lettura, scoperti per nome fra
 // i documenti già indicizzati della pratica — mai un percorso libero passato
 // dal modello. Un file fuori da questo elenco non è raggiungibile.
-export interface DocumentoRif {
-  nome: string;
-  percorso?: string;
-  cartella: string;
-  tipo: string;
-  pagine?: number;
-}
 
 // Lavori lunghi in corso (trascrizioni audio, OCR di PDF scansionati),
 // mostrati all'avvocato uno per riga con il loro avanzamento: con più audio
@@ -39,190 +42,6 @@ export interface LavoroDocumento {
   pagineTotali?: number;
 }
 
-type OnPaginaOcr = (pagina: number, totale: number) => void;
-
-const MAX_CARATTERI = 60_000;
-// Sotto questa soglia una pagina PDF si considera scansionata (a volte resta
-// solo un timbro o un numero di pagina come testo vero).
-const MIN_CARATTERI_PAGINA = 20;
-const MAX_PAGINE_OCR = 30;
-
-// Tesseract scarica i modelli lingua al primo uso (rete richiesta una sola
-// volta, poi restano in cache qui) — senza `cachePath` esplicito scrive nella
-// cartella di lavoro del processo, imprevedibile e non scrivibile una volta
-// impacchettata l'app.
-const CARTELLA_CACHE_OCR = () => join(app.getPath('userData'), 'ocr-cache');
-
-async function ocrImmagine(buffer: Buffer): Promise<string> {
-  await fs.mkdir(CARTELLA_CACHE_OCR(), { recursive: true });
-  const { data } = await Tesseract.recognize(buffer, 'ita+eng', { cachePath: CARTELLA_CACHE_OCR() });
-  return data.text.trim();
-}
-
-// Estrae il contenuto testuale grezzo (bytes) di un file .p7m: una busta
-// crittografica CMS/PKCS#7 SignedData che avvolge il documento originale.
-// L'OCTET STRING del contenuto può arrivare frammentato in più blocchi
-// (BER constructed encoding) per i file più grandi — vanno riuniti in ordine.
-function estraiContenutoFirmato(buffer: Buffer): Buffer {
-  const der = forge.util.createBuffer(buffer.toString('binary'));
-  const asn1 = forge.asn1.fromDer(der);
-  const messaggio = forge.pkcs7.messageFromAsn1(asn1) as unknown as {
-    rawCapture?: { content?: forge.asn1.Asn1 };
-  };
-  const contenuto = messaggio.rawCapture?.content;
-  if (!contenuto) {
-    throw new Error('Busta P7M senza contenuto firmato riconoscibile (forse una firma "detached").');
-  }
-  const raccogli = (nodo: forge.asn1.Asn1): string =>
-    nodo.composed ? (nodo.value as forge.asn1.Asn1[]).map(raccogli).join('') : (nodo.value as string);
-  return Buffer.from(raccogli(contenuto), 'binary');
-}
-
-// Spoglio minimo di un RTF: rimuove i gruppi di controllo, i control word e
-// le graffe, converte gli escape esadecimali (\'e0 ecc.). Non è un parser
-// RTF completo, ma basta a recuperare il testo visibile per un modello.
-function rtfATesto(buffer: Buffer): string {
-  return buffer
-    .toString('latin1')
-    .replace(/\{\\\*[^{}]*\}/g, '')
-    .replace(/\\'([0-9a-fA-F]{2})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/\\par[d]?\b/g, '\n')
-    .replace(/\\[a-zA-Z]+-?\d* ?/g, '')
-    .replace(/[{}]/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile: string, onPaginaOcr?: OnPaginaOcr): Promise<string> {
-  const ext = estensione.toLowerCase();
-
-  if (ext === 'pdf') {
-    // Import dinamico, non in cima al file: pdf-parse si appoggia a un
-    // pacchetto nativo (@napi-rs/canvas) per un polyfill di API del browser
-    // (DOMMatrix) di cui non ha davvero bisogno per il solo testo — se quel
-    // pacchetto nativo manca o non è compatibile con questo computer (per
-    // esempio dopo un pacchettizzazione incrociata da un altro sistema
-    // operativo), l'errore va a finire nel try/catch di leggi_documento
-    // (solo questo documento non si legge) invece di far fallire l'avvio di
-    // tutta l'app, come succedeva quando l'import era statico in cima al file.
-    const { PDFParse } = await import('pdf-parse');
-    const parser = new PDFParse({ data: buffer });
-    try {
-      const risultato = await parser.getText();
-      // Pagine scansionate (nessun layer di testo): le rasterizziamo e le
-      // passiamo a Tesseract. Tetto al numero di pagine perché l'OCR costa
-      // qualche secondo a pagina e un fascicolo scansionato può averne centinaia.
-      const daOcr = risultato.pages
-        .filter((p) => p.text.trim().length < MIN_CARATTERI_PAGINA)
-        .map((p) => p.num)
-        .slice(0, MAX_PAGINE_OCR);
-      const testoOcr = new Map<number, string>();
-      if (daOcr.length > 0) {
-        const schermate = await parser.getScreenshot({ partial: daOcr, scale: 2, imageBuffer: true, imageDataUrl: false });
-        for (const [indice, s] of schermate.pages.entries()) {
-          onPaginaOcr?.(indice + 1, schermate.pages.length);
-          testoOcr.set(s.pageNumber, await ocrImmagine(Buffer.from(s.data)));
-        }
-      }
-      const pagineScansionate = risultato.pages.filter((p) => p.text.trim().length < MIN_CARATTERI_PAGINA).length;
-      const testo = risultato.pages
-        .map((p) => {
-          const ocr = testoOcr.get(p.num);
-          return ocr !== undefined ? `[Pagina ${p.num} — testo da OCR]\n${ocr}` : `[Pagina ${p.num}]\n${p.text}`;
-        })
-        .join('\n\n');
-      const avviso =
-        pagineScansionate > daOcr.length
-          ? `\n\n(OCR eseguito solo sulle prime ${MAX_PAGINE_OCR} pagine scansionate su ${pagineScansionate}.)`
-          : '';
-      if (testo.replace(/\[Pagina[^\]]*\]/g, '').trim().length === 0) {
-        return '(Questo PDF sembra una scansione, ma l\'OCR non ha riconosciuto testo leggibile.)';
-      }
-      return testo + avviso;
-    } finally {
-      await parser.destroy();
-    }
-  }
-  if (ext === 'docx') {
-    const risultato = await mammoth.extractRawText({ buffer });
-    return risultato.value;
-  }
-  if (ext === 'doc') {
-    const documento = await new WordExtractor().extract(buffer);
-    return documento.getBody();
-  }
-  if (ext === 'rtf') {
-    return rtfATesto(buffer);
-  }
-  if (ext === 'txt' || ext === 'eml') {
-    return buffer.toString('utf-8');
-  }
-  if (ext === 'msg') {
-    const dati = new MsgReader(buffer).getFileData();
-    const allegati = dati.attachments?.map((a) => a.fileName).filter(Boolean).join(', ');
-    const intestazione = [
-      dati.senderName ? `Da: ${dati.senderName}` : null,
-      dati.recipients?.length ? `A: ${dati.recipients.map((r) => r.name).join(', ')}` : null,
-      dati.subject ? `Oggetto: ${dati.subject}` : null,
-      allegati ? `Allegati: ${allegati}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    return [intestazione, '', dati.body ?? ''].join('\n');
-  }
-  if (ESTENSIONI_IMMAGINE.has(ext)) {
-    const testo = await ocrImmagine(buffer);
-    return testo || '(Nessun testo riconosciuto in questa immagine.)';
-  }
-  if (ext === 'p7m') {
-    const estratto = estraiContenutoFirmato(buffer);
-    // Convenzione italiana: "Decreto ingiuntivo.pdf.p7m" — l'estensione prima
-    // di .p7m dice come interpretare il contenuto firmato appena estratto.
-    const nomeInterno = nomeFile.replace(/\.p7m$/i, '');
-    const estensioneInterna = extname(nomeInterno).slice(1).toLowerCase();
-    if (!estensioneInterna || !ESTENSIONI_LEGGIBILI.has(estensioneInterna) || estensioneInterna === 'p7m') {
-      return '(Contenuto firmato estratto correttamente, ma il formato del documento originale non è tra quelli leggibili automaticamente.)';
-    }
-    return estraiTestoDaBuffer(estratto, estensioneInterna, nomeInterno, onPaginaOcr);
-  }
-  throw new Error(`Il formato ${ext.toUpperCase()} non è ancora leggibile automaticamente.`);
-}
-
-// Risale dal percorso di un documento alla cartella radice della pratica,
-// usando l'etichetta `cartella` già calcolata dallo scanner (pratiche.ts):
-// "Atti" per un file annidato una cartella sotto la radice, "Cartella
-// principale" per un file già alla radice. Serve solo per sapere dove creare
-// "JarAI - Bozze" quando si salva una trascrizione — mai per leggere o
-// scrivere altrove.
-function radicePratica(doc: DocumentoRif): string | null {
-  if (!doc.percorso) return null;
-  if (doc.cartella === CARTELLA_PRINCIPALE) return dirname(doc.percorso);
-  const livelli = doc.cartella.split('/').length;
-  let radice = doc.percorso;
-  for (let i = 0; i < livelli + 1; i++) radice = dirname(radice);
-  return radice;
-}
-
-async function estraiTesto(
-  doc: DocumentoRif & { percorso: string },
-  onAvanzamento: (a: AvanzamentoTrascrizione) => void,
-  onPaginaOcr: OnPaginaOcr,
-): Promise<string> {
-  const ext = extname(doc.nome).slice(1).toLowerCase();
-
-  // L'audio lavora direttamente sul percorso su disco, non su un buffer in
-  // memoria: la trascrizione la fa un processo Python esterno a cui basta
-  // il file, e la cache (src/main/trascrizione.ts) ha bisogno delle
-  // informazioni del file reale (dimensione, data di modifica) per sapere
-  // se un audio è già stato trascritto in passato.
-  if (ESTENSIONI_AUDIO.has(ext)) {
-    const testo = await trascriviAudio(doc.percorso, radicePratica(doc), doc.nome, onAvanzamento);
-    return testo || '(Non ho riconosciuto parlato in questo file audio.)';
-  }
-  const buffer = await fs.readFile(doc.percorso);
-  return estraiTestoDaBuffer(buffer, ext, doc.nome, onPaginaOcr);
-}
-
 // Dedup delle letture ripetute nella stessa conversazione (come in legis),
 // tenuto per conversazioneId così sopravvive ai turni successivi via resume.
 const lettiPerConversazione = new Map<string, Set<string>>();
@@ -231,6 +50,7 @@ export function creaServerDocumenti(
   conversazioneId: string,
   documenti: DocumentoRif[],
   onLavori: (lavori: LavoroDocumento[]) => void = () => undefined,
+  praticaId?: string,
 ): McpSdkServerConfigWithInstance {
   if (!lettiPerConversazione.has(conversazioneId)) lettiPerConversazione.set(conversazioneId, new Set());
   const letti = lettiPerConversazione.get(conversazioneId)!;
@@ -268,27 +88,83 @@ export function creaServerDocumenti(
     pubblica(true);
   };
 
+  // Testi di tutti i documenti leggibili, per gli strumenti che lavorano
+  // sull'intera pratica (ricerca, date). L'audio non si trascrive per questo:
+  // si usa solo se è già stato trascritto.
+  const testiPratica = async (filtro?: string[]) => {
+    const testi: { nome: string; testo: string }[] = [];
+    const esclusi: string[] = [];
+    for (const doc of documenti) {
+      if (!indicizzabile(doc) || (filtro && !filtro.includes(doc.nome))) continue;
+      const audio = ESTENSIONI_AUDIO.has(extname(doc.nome).slice(1).toLowerCase());
+      try {
+        const testo = audio ? await testoSeIndicizzato(doc) : await testoDocumento(doc);
+        if (testo === null) esclusi.push(doc.nome);
+        else testi.push({ nome: doc.nome, testo });
+      } catch {
+        esclusi.push(doc.nome);
+      }
+    }
+    return { testi, esclusi };
+  };
+  const notaEsclusi = (esclusi: string[]) =>
+    esclusi.length > 0 ? `\n\nEsclusi (non leggibili o audio non trascritti): ${esclusi.join(', ')}` : '';
+
   const elencaDocumenti = tool(
     'elenca_documenti',
-    'Elenca i documenti disponibili nella pratica selezionata in questa conversazione, con la loro cartella e se sono leggibili.',
+    'Elenca i documenti della pratica con cartella e, se già indicizzati, numero di pagine, peso stimato in token e in quante parti va letto ciascuno. Usalo per pianificare le letture.',
     {},
     async () => {
       if (documenti.length === 0) {
         return { content: [{ type: 'text' as const, text: 'Nessun documento importato in questa pratica.' }] };
       }
-      const righe = documenti.map((d) => {
-        const leggibile = d.percorso && ESTENSIONI_LEGGIBILI.has(extname(d.nome).slice(1).toLowerCase());
-        return `- ${d.nome} — ${d.cartella}${leggibile ? '' : ' (non ancora leggibile automaticamente)'}`;
-      });
-      return { content: [{ type: 'text' as const, text: righe.join('\n') }] };
+      let totaleToken = 0;
+      let inPreparazione = 0;
+      const righe = await Promise.all(
+        documenti.map(async (d) => {
+          if (!indicizzabile(d)) return `- ${d.nome} — ${d.cartella} (non leggibile automaticamente)`;
+          const testo = await testoSeIndicizzato(d);
+          if (testo === null) {
+            inPreparazione++;
+            return `- ${d.nome} — ${d.cartella}`;
+          }
+          const token = stimaToken(testo);
+          totaleToken += token;
+          const pagine = numeroPagine(testo);
+          const parti = dividiInParti(testo).length;
+          const dettagli = [pagine ? `${pagine} pag.` : null, `~${token} token`, parti > 1 ? `${parti} parti` : null].filter(Boolean);
+          return `- ${d.nome} — ${d.cartella} (${dettagli.join(', ')})`;
+        }),
+      );
+      const leggibili = documenti.filter(indicizzabile).length;
+      const riepilogo = [
+        `${leggibili} documenti leggibili su ${documenti.length}`,
+        totaleToken > 0 ? `~${totaleToken} token già indicizzati` : null,
+        inPreparazione > 0 ? `${inPreparazione} ancora in preparazione` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return { content: [{ type: 'text' as const, text: `${riepilogo}:\n${righe.join('\n')}` }] };
     },
   );
 
   const leggiDocumento = tool(
     'leggi_documento',
-    'Legge il testo di un documento della pratica, dato il suo nome esatto come mostrato da elenca_documenti. Il testo dei PDF è diviso per pagina; le pagine scansionate vengono lette con OCR (può richiedere qualche secondo a pagina). Per i file audio (telefonate, deposizioni registrate) restituisce la trascrizione — può richiedere qualche minuto per registrazioni lunghe.',
-    { nome: z.string().describe('Nome esatto del file, incluso il caso, come mostrato da elenca_documenti') },
-    async ({ nome }) => {
+    'Legge il testo di un documento della pratica, dato il suo nome esatto come mostrato da elenca_documenti. I documenti lunghi sono divisi in parti: la risposta indica "Parte N di M" e le parti successive vanno lette richiamando lo strumento con parte = N+1, fino all\'ultima. Per i PDF si può chiedere solo un intervallo di pagine con `pagine` (per esempio "12" o "12-15"): molto più economico per verificare un passaggio già individuato. Le pagine scansionate sono lette con OCR. Per i file audio restituisce la trascrizione — può richiedere qualche minuto per registrazioni lunghe.',
+    {
+      nome: z.string().describe('Nome esatto del file, incluso il caso, come mostrato da elenca_documenti'),
+      parte: z.number().int().min(1).optional().describe('Parte da leggere, a partire da 1 (predefinita: 1)'),
+      pagine: z
+        .string()
+        .regex(/^\d+(-\d+)?$/)
+        .optional()
+        .describe('Solo per i PDF: una pagina ("12") o un intervallo ("12-15"). Se indicato, `parte` viene ignorata.'),
+      rileggi: z
+        .boolean()
+        .optional()
+        .describe('true per rileggere una parte già letta in questa conversazione, se il suo testo non è più disponibile'),
+    },
+    async ({ nome, parte = 1, pagine, rileggi = false }) => {
       const doc = documenti.find((d) => d.nome === nome);
       if (!doc) {
         return {
@@ -302,23 +178,63 @@ export function creaServerDocumenti(
           isError: true,
         };
       }
-      if (letti.has(doc.percorso)) {
-        return { content: [{ type: 'text' as const, text: `Hai già letto "${nome}" in questa conversazione: usa quanto hai già estratto.` }] };
+      const percorso = doc.percorso;
+      const chiaveLettura = pagine ? `${percorso}#p${pagine}` : `${percorso}#${parte}`;
+      if (letti.has(chiaveLettura) && !rileggi && !pagine) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Hai già letto la parte ${parte} di "${nome}" in questa conversazione: usa quanto hai già estratto. Se quel testo non è più disponibile, richiama con rileggi: true.`,
+            },
+          ],
+        };
       }
-      const id = doc.percorso;
+      const id = percorso;
       let riuscito = false;
       try {
-        const testo = await estraiTesto(
-          doc as DocumentoRif & { percorso: string },
+        const testo = await testoDocumento(
+          { ...doc, percorso },
           (a) => aggiorna(id, { nome: doc.nome, tipo: 'trascrizione', fase: a.fase, progresso: a.progresso, durataSec: a.durataSec }),
           (pagina, totale) =>
             aggiorna(id, { nome: doc.nome, tipo: 'ocr', fase: 'ocr', pagina, pagineTotali: totale, progresso: (pagina - 1) / totale }),
         );
-        letti.add(doc.percorso);
         riuscito = true;
-        const troncato = testo.length > MAX_CARATTERI;
-        const corpo = troncato ? `${testo.slice(0, MAX_CARATTERI)}\n\n[testo troncato per lunghezza]` : testo;
-        return { content: [{ type: 'text' as const, text: corpo || '(il documento risulta vuoto o senza testo estraibile)' }] };
+        if (pagine) {
+          const [da, a = da] = pagine.split('-').map(Number);
+          const brano = estraiPagine(testo, Math.min(da, a), Math.max(da, a));
+          if (brano === null) {
+            const totale = numeroPagine(testo);
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: totale
+                    ? `"${nome}" ha ${totale} pagine: la pagina ${da} non esiste.`
+                    : `"${nome}" non è diviso in pagine: leggilo per parti.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          letti.add(chiaveLettura);
+          return { content: [{ type: 'text' as const, text: `[${nome}, pagine ${pagine}]\n\n${brano}` }] };
+        }
+        const parti = dividiInParti(testo);
+        if (parte > parti.length) {
+          return {
+            content: [{ type: 'text' as const, text: `"${nome}" ha solo ${parti.length} ${parti.length === 1 ? 'parte' : 'parti'}.` }],
+            isError: true,
+          };
+        }
+        letti.add(chiaveLettura);
+        const corpo = parti[parte - 1] || '(il documento risulta vuoto o senza testo estraibile)';
+        if (parti.length === 1) return { content: [{ type: 'text' as const, text: corpo }] };
+        const seguito =
+          parte < parti.length
+            ? `[Fine della parte ${parte} di ${parti.length}: continua con parte = ${parte + 1}.]`
+            : `[Fine del documento: questa era l'ultima parte.]`;
+        return { content: [{ type: 'text' as const, text: `[Parte ${parte} di ${parti.length} — ${nome}]\n\n${corpo}\n\n${seguito}` }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: err instanceof Error ? err.message : String(err) }], isError: true };
       } finally {
@@ -327,9 +243,175 @@ export function creaServerDocumenti(
     },
   );
 
+  const cercaNeiDocumenti = tool(
+    'cerca_nei_documenti',
+    'Cerca una o più parole o frasi esatte in tutti i documenti della pratica (maiuscole e accenti ignorati) e restituisce i brani in cui compaiono, con documento e pagina. Passa più termini nella stessa chiamata invece di fare più ricerche. Utile per ritrovare nomi, date, importi o clausole. Non sostituisce la lettura: serve a verificare e ritrovare.',
+    {
+      termini: z
+        .array(z.string().min(2))
+        .min(1)
+        .max(10)
+        .describe('Parole o frasi da cercare, per esempio ["decreto ingiuntivo", "Rossi", "12/03/2024"]'),
+    },
+    async ({ termini }) => {
+      // Tetti per termine e per documento: un nome che compare cento volte in
+      // un solo atto non deve riempire il contesto a scapito degli altri.
+      const MASSIMO_PER_TERMINE = 15;
+      const MASSIMO_PER_DOCUMENTO = 4;
+      const { testi, esclusi } = await testiPratica();
+      const sezioni = termini.map((termine) => {
+        const risultati: Risultato[] = [];
+        let totale = 0;
+        for (const { nome, testo } of testi) {
+          const trovati = cercaInTesto(nome, testo, termine, 1000);
+          totale += trovati.length;
+          if (risultati.length < MASSIMO_PER_TERMINE) {
+            risultati.push(...trovati.slice(0, Math.min(MASSIMO_PER_DOCUMENTO, MASSIMO_PER_TERMINE - risultati.length)));
+          }
+        }
+        if (totale === 0) return `## "${termine}": nessun risultato`;
+        const righe = risultati.map((r) => `- ${r.documento}${r.pagina ? `, p. ${r.pagina}` : ''}: ${r.estratto}`);
+        const altri = totale > risultati.length ? `\n(altre ${totale - risultati.length} occorrenze non mostrate: restringi la ricerca)` : '';
+        return `## "${termine}": ${totale} occorrenze\n${righe.join('\n')}${altri}`;
+      });
+      return { content: [{ type: 'text' as const, text: sezioni.join('\n\n') + notaEsclusi(esclusi) }] };
+    },
+  );
+
+  const estraiDate = tool(
+    'estrai_date',
+    'Estrae tutte le date presenti nei documenti della pratica (numeriche o scritte per esteso) in ordine cronologico, ciascuna con documento, pagina e una riga di contesto. Utile per costruire una cronologia dei fatti o trovare scadenze senza rileggere i documenti interi. Le date estratte vanno verificate sul contesto: alcune possono essere numeri di protocollo o riferimenti normativi.',
+    {
+      documenti: z.array(z.string()).optional().describe('Nomi esatti dei documenti da considerare; se omesso, tutta la pratica'),
+      dal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Solo date da questo giorno in poi (AAAA-MM-GG)'),
+      al: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Solo date fino a questo giorno (AAAA-MM-GG)'),
+    },
+    async ({ documenti: filtro, dal, al }) => {
+      const MASSIMO = 150;
+      const { testi, esclusi } = await testiPratica(filtro);
+      const visti = new Set<string>();
+      const date: DataTrovata[] = [];
+      for (const { nome, testo } of testi) {
+        for (const d of trovaDate(nome, testo)) {
+          if ((dal && d.data < dal) || (al && d.data > al)) continue;
+          // La stessa data ripetuta nella stessa pagina (intestazioni, firme)
+          // vale una riga sola.
+          const chiave = `${d.data}|${d.documento}|${d.pagina}`;
+          if (visti.has(chiave)) continue;
+          visti.add(chiave);
+          date.push(d);
+        }
+      }
+      date.sort((x, y) => x.data.localeCompare(y.data));
+      if (date.length === 0) return { content: [{ type: 'text' as const, text: 'Nessuna data trovata.' + notaEsclusi(esclusi) }] };
+      const mostrate = date.slice(0, MASSIMO);
+      const righe = mostrate.map((d) => `- ${d.data} — ${d.documento}${d.pagina ? `, p. ${d.pagina}` : ''}: ${d.contesto}`);
+      const altre =
+        date.length > MASSIMO ? `\n\n(Altre ${date.length - MASSIMO} date non mostrate: restringi con dal/al o con documenti.)` : '';
+      return { content: [{ type: 'text' as const, text: `${date.length} date trovate:\n${righe.join('\n')}${altre}${notaEsclusi(esclusi)}` }] };
+    },
+  );
+
+  // ─── Memoria della pratica (memoriaPratica.ts) ───────────────────────────
+  const leggiMemoriaPratica = tool(
+    'leggi_memoria_pratica',
+    'Legge la memoria della pratica salvata nelle conversazioni precedenti: i fatti accertati e le schede dei documenti già letti integralmente (ancora validi: un documento modificato perde la scheda). Indica anche quali documenti leggibili non hanno una scheda e vanno quindi letti per intero.',
+    {},
+    async () => {
+      const memoria = await leggiMemoria(praticaId!);
+      const fatti = Object.entries(memoria.fatti).map(([chiave, f]) => `- **${chiave}**: ${f.valore}`);
+      const conScheda: string[] = [];
+      const daLeggere: string[] = [];
+      for (const doc of documenti) {
+        if (!indicizzabile(doc) || !doc.percorso) continue;
+        const scheda = memoria.schede[doc.percorso];
+        if (scheda && scheda.impronta === (await improntaFile(doc.percorso))) {
+          conScheda.push(`### ${doc.nome}\n${scheda.testo}`);
+        } else {
+          daLeggere.push(`- ${doc.nome}${scheda ? ' (modificato dopo l\'ultima lettura)' : ''}`);
+        }
+      }
+      const sezioni = [
+        fatti.length > 0 ? `## Fatti accertati\n${fatti.join('\n')}` : '## Fatti accertati\nNessuno.',
+        conScheda.length > 0 ? `## Schede dei documenti già letti\n${conScheda.join('\n\n')}` : null,
+        daLeggere.length > 0 ? `## Documenti da leggere per intero (nessuna scheda valida)\n${daLeggere.join('\n')}` : '## Tutti i documenti leggibili hanno una scheda valida.',
+      ].filter(Boolean);
+      return { content: [{ type: 'text' as const, text: sezioni.join('\n\n') }] };
+    },
+  );
+
+  const salvaInMemoriaPratica = tool(
+    'salva_in_memoria_pratica',
+    `Salva nella memoria della pratica, per le conversazioni future. Due usi, anche insieme nella stessa chiamata: (1) fatti stabili della pratica (parti e ruoli, giudice, numero di ruolo, scadenze, importi chiave, precisazioni dell'avvocato) come chiave → valore; un valore vuoto cancella il fatto; (2) la scheda di un documento appena letto per intero in questa conversazione (tutte le parti): tipo di atto, autore e destinatario, date, importi, punti chiave e domande/eccezioni, ciascuno con il numero di pagina. Massimo ${MAX_CARATTERI_SCHEDA} caratteri per scheda. Salva più schede nella stessa chiamata.`,
+    {
+      fatti: z
+        .array(z.object({ chiave: z.string().min(1).max(100), valore: z.string().max(MAX_CARATTERI_FATTO) }))
+        .max(30)
+        .optional(),
+      schede: z
+        .array(z.object({ documento: z.string().describe('Nome esatto del documento'), scheda: z.string().min(1).max(MAX_CARATTERI_SCHEDA) }))
+        .max(30)
+        .optional(),
+    },
+    async ({ fatti = [], schede = [] }) => {
+      const problemi: string[] = [];
+      const daSalvare: { percorso: string; nome: string; impronta: string; testo: string }[] = [];
+      for (const { documento, scheda } of schede) {
+        const doc = documenti.find((d) => d.nome === documento);
+        if (!doc?.percorso) {
+          problemi.push(`"${documento}": non è un documento di questa pratica.`);
+          continue;
+        }
+        // Una scheda vale come lettura integrale nelle conversazioni future:
+        // si accetta solo se in questa conversazione il documento è stato
+        // letto davvero tutto, parte per parte.
+        const percorso = doc.percorso;
+        const testo = await testoSeIndicizzato({ ...doc, percorso });
+        const parti = testo === null ? 0 : dividiInParti(testo).length;
+        const mancanti = Array.from({ length: parti }, (_, i) => i + 1).filter((n) => !letti.has(`${percorso}#${n}`));
+        if (testo === null || mancanti.length > 0) {
+          problemi.push(
+            `"${documento}": leggilo prima per intero${mancanti.length > 0 ? ` (mancano le parti ${mancanti.join(', ')})` : ''}, poi salva la scheda.`,
+          );
+          continue;
+        }
+        const impronta = await improntaFile(doc.percorso);
+        if (!impronta) {
+          problemi.push(`"${documento}": file non più raggiungibile.`);
+          continue;
+        }
+        daSalvare.push({ percorso: doc.percorso, nome: doc.nome, impronta, testo: scheda });
+      }
+      const ora = new Date().toISOString();
+      let fattiIgnorati = 0;
+      if (fatti.length > 0 || daSalvare.length > 0) {
+        await modificaMemoria(praticaId!, (m) => {
+          for (const { chiave, valore } of fatti) {
+            if (!valore.trim()) delete m.fatti[chiave];
+            else if (m.fatti[chiave] || Object.keys(m.fatti).length < MAX_FATTI) m.fatti[chiave] = { valore: valore.trim(), aggiornatoIl: ora };
+            else fattiIgnorati++;
+          }
+          for (const s of daSalvare) m.schede[s.percorso] = { nome: s.nome, impronta: s.impronta, testo: s.testo.trim(), aggiornataIl: ora };
+        });
+      }
+      const esito = [
+        `Salvati: ${fatti.length - fattiIgnorati} fatti, ${daSalvare.length} schede.`,
+        fattiIgnorati > 0 ? `${fattiIgnorati} fatti non salvati: la memoria ha già ${MAX_FATTI} fatti, accorpa o cancella quelli superati.` : null,
+        ...problemi,
+      ].filter(Boolean);
+      return { content: [{ type: 'text' as const, text: esito.join('\n') }], isError: daSalvare.length === 0 && fatti.length === 0 && problemi.length > 0 };
+    },
+  );
+
   return createSdkMcpServer({
     name: 'jarai-documenti',
-    tools: [elencaDocumenti, leggiDocumento],
+    tools: [
+      elencaDocumenti,
+      leggiDocumento,
+      cercaNeiDocumenti,
+      estraiDate,
+      ...(praticaId ? [leggiMemoriaPratica, salvaInMemoriaPratica] : []),
+    ],
   });
 }
 

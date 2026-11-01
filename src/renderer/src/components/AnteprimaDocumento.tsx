@@ -3,14 +3,16 @@ import type { Documento } from '../types';
 
 const ESTENSIONI_IMMAGINE = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
 
-// Solo PDF e immagini hanno un'anteprima visiva vera (spec §5.6) — sono gli
-// unici due formati che si possono mostrare così come sono, senza prima
-// convertirli in qualcos'altro. Per il resto (DOCX, DOC, RTF, EML, MSG,
-// P7M, audio) PraticheView tiene la nota testuale di sempre.
+// PDF e immagini hanno un'anteprima visiva vera (una pagina così com'è); i
+// DOCX mostrano il testo estratto — in particolare le trascrizioni audio
+// (spec §6.2): il collegamento "📝 Trascrizione" sulla riga dell'audio deve
+// far leggere il testo vero, non fermarsi a una nota generica. Per il resto
+// (DOC, RTF, EML, MSG, P7M, audio) PraticheView tiene la nota testuale di
+// sempre — JarAI li legge comunque in conversazione.
 export function anteprimaSupportata(doc: Documento): boolean {
   if (!doc.percorso) return false;
   const ext = doc.tipo.toLowerCase();
-  return ext === 'pdf' || ESTENSIONI_IMMAGINE.has(ext);
+  return ext === 'pdf' || ext === 'docx' || ESTENSIONI_IMMAGINE.has(ext);
 }
 
 // Livelli di zoom, in percentuale della larghezza del riquadro (non della
@@ -27,11 +29,13 @@ interface Props {
 export default function AnteprimaDocumento({ doc }: Props) {
   const ext = doc.tipo.toLowerCase();
   const eImmagine = ESTENSIONI_IMMAGINE.has(ext);
+  const eDocx = ext === 'docx';
   const percorso = doc.percorso;
 
   const [pagina, setPagina] = useState(1);
   const [totalePagine, setTotalePagine] = useState<number | null>(null);
   const [url, setUrl] = useState<string | null>(null);
+  const [testo, setTesto] = useState<string | null>(null);
   const [caricando, setCaricando] = useState(true);
   const [errore, setErrore] = useState<string | null>(null);
   const [zoomIdx, setZoomIdx] = useState(ADATTA);
@@ -57,10 +61,44 @@ export default function AnteprimaDocumento({ doc }: Props) {
     setPagina(1);
     setTotalePagine(null);
     setUrl(null);
+    setTesto(null);
     setZoomIdx(ADATTA);
   }, [doc.id]);
 
+  // I DOCX (in particolare le trascrizioni) non hanno pagine/zoom: solo
+  // testo, letto una volta sola — percorso diverso dal blob PDF/immagine
+  // sotto, niente URL da creare o revocare.
   useEffect(() => {
+    if (!eDocx) return;
+    if (!percorso) {
+      setErrore('Questo documento non ha un file collegato.');
+      setCaricando(false);
+      return;
+    }
+    let annullato = false;
+    setCaricando(true);
+    setErrore(null);
+    window.jarai.documenti
+      .anteprimaDocx(percorso)
+      .then((r) => {
+        if (annullato) return;
+        setTesto(r.testo.trim() || '(Questo documento non contiene testo.)');
+      })
+      .catch((err) => {
+        if (annullato) return;
+        console.error('[anteprima] lettura DOCX non riuscita', doc.nome, err);
+        setErrore("Non riesco a leggere il testo di questo file.");
+      })
+      .finally(() => {
+        if (!annullato) setCaricando(false);
+      });
+    return () => {
+      annullato = true;
+    };
+  }, [eDocx, percorso, doc.nome]);
+
+  useEffect(() => {
+    if (eDocx) return;
     if (!percorso) {
       setErrore('Questo documento non ha un file collegato.');
       setCaricando(false);
@@ -95,7 +133,7 @@ export default function AnteprimaDocumento({ doc }: Props) {
     return () => {
       annullato = true;
     };
-  }, [percorso, pagina, eImmagine, doc.nome]);
+  }, [eDocx, percorso, pagina, eImmagine, doc.nome]);
 
   // Revoca l'ultimo blob creato quando il componente sparisce (documento
   // chiuso) — non solo ad ogni cambio pagina, dove è già gestito sopra.
@@ -106,6 +144,16 @@ export default function AnteprimaDocumento({ doc }: Props) {
   }, []);
 
   if (errore) return <div className="anteprima-errore">{errore}</div>;
+
+  if (eDocx) {
+    return (
+      <div className="anteprima-doc">
+        <div className="anteprima-testo-wrap">
+          {caricando && !testo ? <div className="anteprima-caricando">Leggo il testo…</div> : <p className="anteprima-testo">{testo}</p>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="anteprima-doc">

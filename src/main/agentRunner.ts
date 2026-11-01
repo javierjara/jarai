@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk';
 import type { WebContents } from 'electron';
-import { salvaStatoCollegamento } from './claudeAuth';
+import { haChiave, salvaStatoCollegamento } from './claudeAuth';
 import { ambienteClaude, leggiLicenza, statoLicenza } from './licenza';
 import { percorsoClaudeIntegrato } from './claudeLogin';
 import { registraErroreGrezzo } from './logger';
 import { creaServerDocumenti, pulisciLettureConversazione, type DocumentoRif, type LavoroDocumento } from './documentTools';
 import { creaServerBozze, type EventoBozza } from './bozze';
 import { registraUso } from './usage';
+import { indicizzaInBackground } from './indice';
+import { creaServerDejure, dejureAttiva, PROMPT_DEJURE, STRUMENTI_DEJURE } from './dejure';
 
 // Prompt legale (spec §6.4). Le regole 1 e 4 (verificare che i documenti
 // citati esistano, citare sempre la fonte) presuppongono che l'assistente
@@ -16,10 +18,22 @@ import { registraUso } from './usage';
 const PROMPT_LEGALE = `Sei l'assistente legale di JarAI, integrato nello studio di un avvocato italiano.
 Rispondi sempre in italiano, con un registro professionale ma chiaro — mai gergo tecnico informatico,
 mai nomi di strumenti, file di sistema o dettagli implementativi.
-Se la conversazione riguarda una pratica, usa elenca_documenti per vedere cosa c'è prima di rispondere,
-poi leggi_documento solo sui documenti davvero rilevanti alla domanda — non leggere tutto l'elenco per
-principio, la pratica può contenere decine di file. Ogni affermazione sui fatti porta la fonte: nome del
-documento e, per i PDF, il numero di pagina (il testo estratto riporta "[Pagina N]" prima di ogni pagina).
+Se la conversazione riguarda una pratica, alla prima domanda usa insieme leggi_memoria_pratica ed
+elenca_documenti, poi leggi con leggi_documento, per intero e fino all'ultima parte, OGNI documento leggibile
+che non ha una scheda valida nella memoria, nessuno escluso, prima di rispondere: l'avvocato preferisce una
+risposta più lenta a una fondata su una lettura parziale. Per i documenti che hanno già una scheda parti
+dalla scheda e torna sul testo (pagine indicate nella scheda o cerca_nei_documenti) ogni volta che la
+domanda richiede la formulazione esatta o un dettaglio che la scheda non riporta. Leggi più documenti nello
+stesso passaggio (fino a 8-10 chiamate insieme), non uno alla volta: ogni passaggio in più costa tempo e
+denaro. Appena hai letto per intero dei documenti senza scheda, salvane le schede con
+salva_in_memoria_pratica (più schede nella stessa chiamata): sintetiche ma con le pagine, così le prossime
+conversazioni non devono rileggerli. Salva lì anche i fatti stabili della pratica quando li accerti o
+l'avvocato li precisa. Nelle domande successive della stessa conversazione non rileggere quello che hai già
+letto: per verificare un punto preciso usa cerca_nei_documenti (più termini in una sola chiamata) o
+leggi_documento con l'intervallo di pagine. Per cronologie, scadenze e sequenze di fatti parti da
+estrai_date e verifica sul testo solo i passaggi che contano. Se un documento non si riesce a
+leggere, dillo alla fine della risposta indicandolo per nome. Ogni affermazione sui fatti porta la fonte: nome
+del documento e, per i PDF, il numero di pagina (il testo estratto riporta "[Pagina N]" prima di ogni pagina).
 Se un documento citato dall'avvocato non risulta tra quelli disponibili, dillo esplicitamente e chiedi
 dove si trova, invece di inventarne il contenuto: meglio un segnaposto dichiarato che un'affermazione
 infondata. Non fondare mai un ragionamento su fatti che esporrebbero il cliente a responsabilità proprie,
@@ -40,6 +54,7 @@ interface InvioPayload {
   conversazioneId: string;
   testo: string;
   qualita: Qualita;
+  praticaId?: string;
   praticaNome?: string;
   documenti?: DocumentoRif[];
 }
@@ -83,7 +98,13 @@ type EventoAgente = EventoDelta | EventoAttivita | EventoCompletato | EventoErro
 function attivitaPerStrumento(nomeStrumento: string): string {
   if (nomeStrumento.endsWith('__leggi_documento')) return 'Sto leggendo un documento della pratica…';
   if (nomeStrumento.endsWith('__elenca_documenti')) return 'Sto guardando i documenti della pratica…';
+  if (nomeStrumento.endsWith('__cerca_nei_documenti')) return 'Sto cercando nei documenti della pratica…';
+  if (nomeStrumento.endsWith('__estrai_date')) return 'Sto ricostruendo le date della pratica…';
+  if (nomeStrumento.endsWith('__leggi_memoria_pratica')) return 'Sto ripassando gli appunti sulla pratica…';
+  if (nomeStrumento.endsWith('__salva_in_memoria_pratica')) return 'Sto annotando i punti chiave della pratica…';
   if (nomeStrumento.endsWith('__crea_bozza')) return 'Sto preparando la bozza…';
+  if (nomeStrumento.endsWith('__cerca_dejure')) return 'Sto cercando giurisprudenza su DeJure…';
+  if (nomeStrumento.endsWith('__leggi_dejure')) return 'Sto leggendo una pronuncia su DeJure…';
   return 'Sto lavorando…';
 }
 
@@ -91,12 +112,44 @@ const abortControllers = new Map<string, AbortController>();
 const sessioniPerConversazione = new Map<string, string>();
 
 function modelloPer(qualita: Qualita): string {
-  return qualita === 'Massima' ? 'claude-opus-5' : 'claude-sonnet-5';
+  return qualita === 'Massima' ? 'claude-opus-5-5' : 'claude-sonnet-5';
+}
+
+// Il ragionamento si paga come testo in uscita (la voce più cara): per le
+// domande di tutti i giorni basta un livello medio, "Massima" ragiona a fondo.
+function effortPer(qualita: Qualita): 'medium' | 'high' {
+  return qualita === 'Massima' ? 'high' : 'medium';
+}
+
+// Tetto di spesa per singola domanda, solo con la licenza JarAI (lì il costo
+// è di JarAI, non dello studio): protegge da una domanda che scatena letture
+// a catena su una pratica enorme. Con la stima di una pratica media da 100
+// file (~$3 Standard, ~$8 Massima) resta un margine ampio.
+const TETTO_USD_PER_DOMANDA: Record<Qualita, number> = { Standard: 8, Massima: 20 };
+
+// Ogni lettura di documento è almeno un turno (di più per i documenti divisi
+// in parti), e il prompt chiede di leggere tutta la pratica: il margine
+// cresce con il numero di documenti invece di fermarsi a metà elenco.
+function turniMassimi(numeroDocumenti: number): number {
+  return Math.min(300, 20 + numeroDocumenti * 3);
+}
+
+// Il preset "claude_code" porta con sé migliaia di token di istruzioni per
+// programmare, rimandati a ogni passaggio e fuori tema per un avvocato. Con
+// una chiave API (dello studio o dietro la licenza JarAI) si usa solo il
+// prompt legale. Con l'accesso tramite account Claude il preset resta: quel
+// tipo di accesso è pensato per Claude Code e va usato con la sua identità.
+function promptDiSistema(soloPromptLegale: boolean, conDejure: boolean): Options['systemPrompt'] {
+  const prompt = conDejure ? `${PROMPT_LEGALE}\n${PROMPT_DEJURE}` : PROMPT_LEGALE;
+  if (!soloPromptLegale) return { type: 'preset', preset: 'claude_code', append: prompt };
+  const oggi = new Date().toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  return `${prompt}\nOggi è ${oggi}.`;
 }
 
 async function opzioniBase(
   qualita: Qualita,
   conversazioneId: string,
+  praticaId: string | undefined,
   documenti: DocumentoRif[],
   onBozza: (bozza: EventoBozza) => void,
   onLavori: (lavori: LavoroDocumento[]) => void,
@@ -104,22 +157,36 @@ async function opzioniBase(
   const abort = new AbortController();
   abortControllers.set(conversazioneId, abort);
 
+  const conLicenza = (await leggiLicenza()) !== null;
+  const conChiave = !conLicenza && (await haChiave());
+  // DeJure (src/main/dejure.ts): gli strumenti esistono solo se l'avvocato
+  // ha collegato la banca dati da Impostazioni → Integrazioni.
+  const conDejure = await dejureAttiva();
+
   return {
     model: modelloPer(qualita),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: PROMPT_LEGALE },
+    effort: effortPer(qualita),
+    maxBudgetUsd: conLicenza ? TETTO_USD_PER_DOMANDA[qualita] : undefined,
+    systemPrompt: promptDiSistema(conLicenza || conChiave, conDejure),
     tools: [], // Nessuno strumento nativo (Bash/Write/Edit/...): solo i jarai-* sotto.
     mcpServers: {
-      'jarai-documenti': creaServerDocumenti(conversazioneId, documenti, onLavori),
+      'jarai-documenti': creaServerDocumenti(conversazioneId, documenti, onLavori, praticaId),
       'jarai-bozze': creaServerBozze(onBozza),
+      ...(conDejure ? { 'jarai-dejure': creaServerDejure() } : {}),
     },
     allowedTools: [
       'mcp__jarai-documenti__elenca_documenti',
       'mcp__jarai-documenti__leggi_documento',
+      'mcp__jarai-documenti__cerca_nei_documenti',
+      'mcp__jarai-documenti__estrai_date',
+      'mcp__jarai-documenti__leggi_memoria_pratica',
+      'mcp__jarai-documenti__salva_in_memoria_pratica',
       'mcp__jarai-bozze__crea_bozza',
+      ...(conDejure ? STRUMENTI_DEJURE : []),
     ],
     settingSources: [], // Le istruzioni dello studio arrivano da SQLite (Fase 5), mai dal disco.
     includePartialMessages: true,
-    maxTurns: 12, // Margine per qualche lettura di documenti prima della risposta finale.
+    maxTurns: turniMassimi(documenti.length),
     resume: sessioniPerConversazione.get(conversazioneId),
     abortController: abort,
     // Stesso motivo del login (claudeLogin.ts): senza questo l'SDK cerca da
@@ -159,20 +226,31 @@ function messaggioErroreItaliano(err: unknown): string {
   if (/abort/i.test(testo)) {
     return 'Richiesta interrotta.';
   }
+  if (/error_max_turns/.test(testo)) {
+    return 'La pratica è molto ampia e non sono riuscito a completare la lettura in questa richiesta. Chiedimi di continuare, oppure restringi la domanda a una parte dei documenti.';
+  }
+  if (/error_max_budget_usd/.test(testo)) {
+    return 'Questa richiesta ha raggiunto il limite di spesa previsto per una singola domanda. Prova a restringerla a una parte dei documenti o a una questione più precisa.';
+  }
   return 'Non riesco a raggiungere Claude. Controlla la connessione e riprova.';
 }
 
 export async function inviaMessaggio(payload: InvioPayload, webContents: WebContents): Promise<void> {
-  const { conversazioneId, testo, qualita, documenti } = payload;
+  const { conversazioneId, testo, qualita, praticaId, documenti } = payload;
   const invia = (evento: EventoAgente) => {
     if (!webContents.isDestroyed()) webContents.send('claude:evento', evento);
   };
+
+  // Pratiche importate prima dell'indice, o file cambiati nel frattempo:
+  // l'indicizzazione parte comunque, così le letture successive sono pronte.
+  indicizzaInBackground(documenti ?? []);
 
   let testoCompleto = '';
   try {
     const options = await opzioniBase(
       qualita,
       conversazioneId,
+      praticaId,
       documenti ?? [],
       (bozza) => invia({ tipo: 'bozza', conversazioneId, titolo: bozza.titolo, contenuto: bozza.contenuto }),
       (lavori) => invia({ tipo: 'lavori', conversazioneId, lavori }),

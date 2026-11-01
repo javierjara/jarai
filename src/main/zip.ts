@@ -1,5 +1,6 @@
 import { createWriteStream, promises as fs } from 'node:fs';
-import { dirname, resolve as risolviPercorso, sep } from 'node:path';
+import { app } from 'electron';
+import { dirname, join, resolve as risolviPercorso, sep } from 'node:path';
 import yauzl from 'yauzl';
 
 // Estrae ogni voce dello zip dentro destDir, ricreando le sottocartelle —
@@ -13,6 +14,10 @@ import yauzl from 'yauzl';
 // zippato dal tribunale o dalla controparte) e l'installazione del Python
 // privato per la trascrizione audio (pythonRuntime.ts, il pacchetto
 // "embeddable" di python.org) — stessa esigenza, stesso codice.
+// Dove finisce il contenuto degli zip trovati nelle pratiche (pratiche.ts):
+// nella cartella dati di JarAI, mai in quella dell'avvocato.
+export const CARTELLA_ZIP_ESTRATTI = () => join(app.getPath('userData'), 'zip-estratti');
+
 export function estraiZip(percorsoZip: string, destDir: string): Promise<void> {
   return new Promise((resolve, reject) => {
     yauzl.open(percorsoZip, { lazyEntries: true }, (err, zipfile) => {
