@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { Studio } from '../types';
+import CardSitoStudio from './CardSitoStudio';
 
 interface Props {
   studio: Studio;
   onSalvaStudio: (studio: Studio) => void;
+  conStudioDigitale?: boolean;
 }
 
-export default function Settings({ studio, onSalvaStudio }: Props) {
+export default function Settings({ studio, onSalvaStudio, conStudioDigitale = false }: Props) {
   // Licenza JarAI (src/main/licenza.ts): con una licenza valida lo studio
   // non ha bisogno di nessun account Claude: si collega tramite l'API e il
   // proxy JarAI. Lo stato viene dal servizio JarAI
@@ -386,6 +388,12 @@ export default function Settings({ studio, onSalvaStudio }: Props) {
               )}
             </div>
           </div>
+
+          {/* Sito dello studio: solo con lo Studio digitale attivo sulla licenza
+              (anche appena attivata qui sopra, prima di uscire da Impostazioni). */}
+          {(conStudioDigitale || licenza?.funzioni?.includes('studio_digitale')) && (
+<CardSitoStudio />
+          )}
 
           {/* Trascrizione audio */}
           <div className="s-card">

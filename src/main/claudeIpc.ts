@@ -17,6 +17,7 @@ const documentoRifSchema = z.object({
 });
 const invioSchema = z.object({
   conversazioneId: z.string().min(1),
+  modalita: z.enum(['pratica', 'studio-digitale']).optional(),
   testo: z.string().min(1),
   qualita: z.enum(['Standard', 'Massima']),
   praticaId: z.string().min(1).optional(),

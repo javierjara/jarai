@@ -140,3 +140,11 @@ export const WarningIcon = ({ size = 16 }: IconProps) => (
     <line x1="12" y1="17" x2="12.01" y2="17" />
   </svg>
 );
+
+export const GlobeIcon = ({ size = 15 }: IconProps) => (
+  <svg {...base(size)}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="2" y1="12" x2="22" y2="12" />
+    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+  </svg>
+);

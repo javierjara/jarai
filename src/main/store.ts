@@ -46,6 +46,48 @@ const bozzaSchema = z.object({
   contenuto: z.string(),
 });
 
+const articoloSchema = z.object({
+  titolo: z.string(),
+  slug: z.string(),
+  metaTitolo: z.string(),
+  metaDescrizione: z.string(),
+  categorie: z.array(z.string()),
+  contenuto: z.string(),
+  fotoCerca: z.string().optional(),
+  daVerificare: z.array(z.string()).optional(),
+  linkedin: z.string().optional(),
+  instagram: z
+    .object({ slide: z.array(z.object({ titoletto: z.string(), testo: z.string() })), didascalia: z.string() })
+    .optional(),
+});
+
+const ideaSchema = z.object({
+  id: z.string(),
+  titolo: z.string(),
+  categoria: z.string(),
+  motivo: z.string(),
+  tipo: z.enum(['google', 'normativa', 'stagionale', 'domande', 'aggiornamento']),
+  fonte: z.string().optional(),
+  stato: z.enum(['da_valutare', 'pianificata', 'scritta', 'scartata']),
+  pianificataPer: z.string().optional(),
+  conversazioneId: z.string().optional(),
+  creataIl: z.string(),
+});
+
+const preferenzeSitoSchema = z.object({
+  ideeLunedi: z.boolean(),
+  ultimeIdeeIl: z.string().optional(),
+  obiettivoSettimana: z.number(),
+});
+
+const copertinaSchema = z.object({
+  file: z.string(),
+  alt: z.string(),
+  origine: z.enum(['copertina', 'foto', 'sito', 'caricata']),
+  credito: z.string().optional(),
+  mediaId: z.union([z.number(), z.string()]).optional(),
+});
+
 const messaggioSchema = z.object({
   id: z.string(),
   ruolo: z.enum(['avvocato', 'assistente']),
@@ -53,6 +95,7 @@ const messaggioSchema = z.object({
   fonti: z.array(fonteCitataSchema).optional(),
   isStreaming: z.boolean().optional(),
   bozza: bozzaSchema.optional(),
+  articolo: articoloSchema.optional(),
 });
 
 const passoPianoSchema = z.object({
@@ -76,6 +119,38 @@ const conversazioneSchema = z.object({
 
 const studioSchema = z.object({ nome: z.string(), avvocato: z.string() });
 
+const conversazioneSitoSchema = z.object({
+  id: z.string(),
+  titolo: z.string(),
+  stato: z.enum(['in_corso', 'attesa', 'completata', 'interrotta']),
+  aggiornataIl: z.string(),
+  messaggi: z.array(messaggioSchema),
+  sito: z
+    .object({
+      id: z.union([z.number(), z.string()]),
+      stato: z.enum(['bozza', 'pubblicato']),
+      urlModifica: z.string(),
+      urlPubblico: z.string(),
+      aggiornatoIl: z.string(),
+    })
+    .optional(),
+  copertina: copertinaSchema.optional(),
+  articolo: articoloSchema.optional(),
+  modificato: z.boolean().optional(),
+  modificataIl: z.string().optional(),
+  programmataPer: z.string().optional(),
+  ultimoErroreProgrammazione: z.string().optional(),
+  dataPrevista: z.string().optional(),
+  social: z
+    .object({
+      linkedinIl: z.string().optional(),
+      instagramIl: z.string().optional(),
+      linkedinFatto: z.boolean().optional(),
+      instagramFatto: z.boolean().optional(),
+    })
+    .optional(),
+});
+
 const statoSchema = z.object({
   pratiche: z.array(praticaSchema),
   documenti: z.record(z.string(), z.array(documentoSchema)),
@@ -83,6 +158,10 @@ const statoSchema = z.object({
   // Facoltativo: i dati salvati prima di questo campo (jarai-dati.json già
   // esistenti) restano validi, l'app riparte dal nome studio di default.
   studio: studioSchema.optional(),
+  // Studio digitale: facoltativo come sopra.
+  studioDigitale: z.array(conversazioneSitoSchema).optional(),
+  ideeSito: z.array(ideaSchema).optional(),
+  preferenzeSito: preferenzeSitoSchema.optional(),
 });
 
 export type StatoPersistito = z.infer<typeof statoSchema>;

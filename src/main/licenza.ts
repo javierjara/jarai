@@ -47,6 +47,8 @@ export interface StatoLicenza {
   piano?: string;
   domandeUsate?: number;
   domandeMese?: number;
+  /** Funzioni aggiuntive attivate dal CRM per lo studio (es. "studio_digitale"). */
+  funzioni?: string[];
 }
 
 // Chiede lo stato al proxy (GET /v1/license): non passa da Claude e non
@@ -60,8 +62,15 @@ export async function statoLicenza(licenza?: string | null): Promise<StatoLicenz
       return { valida: false, messaggio: 'Licenza JarAI non valida, sospesa o scaduta.' };
     }
     if (!risposta.ok) return { valida: false, messaggio: 'Il servizio JarAI non risponde. Riprova tra poco.' };
-    const dati = (await risposta.json()) as { customerName: string; plan: string; monthlyLimit: number; count: number };
-    return { valida: true, studio: dati.customerName, piano: dati.plan, domandeUsate: dati.count, domandeMese: dati.monthlyLimit };
+    const dati = (await risposta.json()) as { customerName: string; plan: string; monthlyLimit: number; count: number; features?: string[] };
+    return {
+      valida: true,
+      studio: dati.customerName,
+      piano: dati.plan,
+      domandeUsate: dati.count,
+      domandeMese: dati.monthlyLimit,
+      funzioni: Array.isArray(dati.features) ? dati.features : [],
+    };
   } catch {
     return { valida: false, messaggio: 'Non riesco a raggiungere il servizio JarAI. Controlla la connessione.' };
   }
@@ -95,4 +104,26 @@ export async function ambienteClaude(domandaId?: string): Promise<Record<string,
   }
   const chiave = await leggiChiave();
   return chiave ? { ...base, ANTHROPIC_API_KEY: chiave } : base;
+}
+
+// Funzioni aggiuntive (es. "studio_digitale"): si attivano dal CRM sulla
+// licenza dello studio. Senza licenza JarAI non ce ne sono. In sviluppo
+// JARAI_FUNZIONI="studio_digitale" le attiva senza passare dal proxy.
+let funzioniCache: { valore: string[]; scadeIl: number } | null = null;
+
+export async function funzioniAttive(forza = false): Promise<string[]> {
+  const daAmbiente = process.env.JARAI_FUNZIONI?.split(',').map((f) => f.trim()).filter(Boolean);
+  if (daAmbiente?.length) return daAmbiente;
+  if (!forza && funzioniCache && funzioniCache.scadeIl > Date.now()) return funzioniCache.valore;
+  const stato = await statoLicenza();
+  // Se il servizio non risponde si tiene l'ultimo valore noto: una rete
+  // lenta non deve far sparire la sezione a metà lavoro.
+  if (!stato.valida && stato.messaggio?.includes('raggiungere') && funzioniCache) return funzioniCache.valore;
+  const valore = stato.valida ? (stato.funzioni ?? []) : [];
+  funzioniCache = { valore, scadeIl: Date.now() + 5 * 60_000 };
+  return valore;
+}
+
+export async function funzioneAttiva(nome: string): Promise<boolean> {
+  return (await funzioniAttive()).includes(nome);
 }
