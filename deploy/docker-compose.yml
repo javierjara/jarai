@@ -1,0 +1,41 @@
+# JarAI Server per uno studio. Un progetto compose per studio:
+#   cd /srv/jarai/<studio> && docker compose -p jarai-<studio> up -d
+#
+# ATTENZIONE: l'immagine jarai-server non esiste ancora (arriva con il passo
+# "JarAI Server" del piano in docs/eventstore-protocollo.md). Questo file
+# fissa da subito volumi, rete e limiti, così il server è pronto.
+services:
+  jarai:
+    image: ${JARAI_IMAGE:-ghcr.io/javierjara/jarai-server:latest}
+    container_name: jarai-${STUDIO}
+    restart: unless-stopped
+    env_file: .env
+    # Stesso uid/gid dell'utente di sistema "jarai" (id -u jarai / id -g jarai).
+    user: "${JARAI_UID}:${JARAI_GID}"
+    # Nessuna porta pubblicata: si entra solo dal Caddy condiviso, che sta
+    # sulla rete docker "web" e raggiunge il container per nome
+    # (jarai-<studio>:8787). Vedi deploy/proxy/studio.caddy.
+    networks: [web]
+    volumes:
+      - ./dati:/var/lib/jarai
+      - ./pratiche:/pratiche
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: ${JARAI_MEMORIA:-3g}
+    cpus: ${JARAI_CPU:-2}
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/salute').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  web:
+    external: true

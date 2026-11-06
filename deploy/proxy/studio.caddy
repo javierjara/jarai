@@ -1,0 +1,14 @@
+# Copiare in /opt/botcom/caddy/sites/jarai-<studio>.caddy sostituendo "molfino",
+# poi: docker exec caddy-caddy-1 caddy validate --config /etc/caddy/Caddyfile
+#      docker exec caddy-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+molfino.jarai.botcom.it {
+	encode zstd gzip
+	request_body {
+		max_size 200MB
+	}
+	reverse_proxy jarai-molfino:8787
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}
