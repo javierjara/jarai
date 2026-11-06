@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { apriDatabase } from '../core/db';
 import { Host, type EventoMotore, type Motore } from '../core/host';
+import { avviaTrasportoWs } from '../core/trasportoWs';
+import { randomBytes } from 'node:crypto';
 import { DISPOSITIVO_LOCALE } from '../shared/protocollo';
 import { MIGRAZIONE_CONVERSAZIONI, MIGRAZIONE_RESTO, migraConversazioniPratica, migraResto, migrazioneFatta } from '../core/migrazioneJson';
 import { fermaMessaggio, inviaMessaggio, type EventoAgente } from './agentRunner';
@@ -93,6 +95,8 @@ export async function avviaHost(getWindow: () => BrowserWindow | null): Promise<
 
   ipcMain.handle('jarai:busta', (_event, busta: unknown) => host.gestisciBusta(busta, { dispositivoId: DISPOSITIVO_LOCALE }));
 
+  if (!app.isPackaged && process.env['JARAI_REMOTO_PROVA'] === '1') await avviaClienteDiProva(host);
+
   return { host, conversazioniNelDatabase: () => migrate };
 }
 
@@ -147,5 +151,23 @@ function daEventoAgente(e: EventoAgente): EventoMotore | null {
       return { tipo: 'completato', testo: e.testo, costoUsd: e.costoUsd };
     case 'errore':
       return { tipo: 'errore', messaggio: e.messaggio, ...(e.scartaParziale ? { scartaParziale: true } : {}) };
+  }
+}
+
+// Passo 6, solo in sviluppo e solo su richiesta (JARAI_REMOTO_PROVA=1): lo
+// stesso host raggiungibile via WebSocket, come lo vedrà il telefono. Solo
+// su 127.0.0.1 e con un token casuale a ogni avvio: nessun'altra app o
+// pagina web del computer può collegarsi senza conoscerlo.
+async function avviaClienteDiProva(host: Host): Promise<void> {
+  const token = randomBytes(24).toString('base64url');
+  const porta = Number(process.env['JARAI_REMOTO_PORTA'] ?? 8787);
+  try {
+    await avviaTrasportoWs(host, {
+      porta,
+      autentica: (t) => (t === token ? { dispositivoId: 'prova-remoto' } : null),
+    });
+    console.log(`[remoto-prova] ws://127.0.0.1:${porta}/?token=${token}`);
+  } catch (err) {
+    console.error('[remoto-prova] non avviato:', err instanceof Error ? err.message : err);
   }
 }

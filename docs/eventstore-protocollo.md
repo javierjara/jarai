@@ -283,9 +283,7 @@ I dati d'esempio (`datiIniziali.ts`) vengono creati dall'host al primo avvio
    riprende con contesto (`resume`).
 5. **Pratiche, documenti e Studio digitale sull'host**. ✅ Le viste modificano lo stato React come prima; `src/renderer/src/sincronizza.ts` manda all'host solo le differenze come comandi (`pratica.salva`, `documenti.salva`, `conversazioneSito.salva`…). I messaggi dello Studio digitale passano dall'host; la richiesta di idee resta una chiamata singola. `jarai-dati.json` viene rinominato dopo la migrazione. `dati:carica`/`dati:salva` e `store.ts` restano **solo come ripiego** se la migrazione fallisce (snapshot.entita = null): l'app non si apre mai vuota.
    *Fatto quando:* nel renderer non resta nessuna scrittura diretta di stato.
-6. **Strumento di verifica**: una pagina nascosta di debug (solo in dev) che
-   fa da "secondo client" sullo stesso host, con il suo cursore. È la prova
-   generale del telefono, senza relay.
+6. **Secondo client** ✅ Invece di una pagina di debug, il vero trasporto remoto: `src/core/trasportoWs.ts` (host via WebSocket, token per dispositivo, abbonamenti, battito) e `src/shared/clienteRemoto.ts` (cursore, riconnessione con recupero, gira in browser e Node). Test con due client remoti (`remoto.test.ts`); in sviluppo `JARAI_REMOTO_PROVA=1` apre il WebSocket su 127.0.0.1 con token casuale. Provato con Claude vero da uno script "telefono" in JSON puro. Nota: con `--remote-debugging-port` Electron intercetta le connessioni WebSocket del processo; senza quell'opzione (l'app normale) funziona.
 
 Stima: 1,5-2 settimane. Il passo 1 è il più incerto.
 
