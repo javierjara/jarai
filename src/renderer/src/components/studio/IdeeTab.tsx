@@ -1,12 +1,10 @@
 import { useState, type Dispatch, type SetStateAction } from 'react';
-import type { Idea, PreferenzeSito, TipoIdea } from '../../types';
+import type { Idea, TipoIdea } from '../../types';
 import { dataBreve, daGiorno, giornoDi } from './util';
 
 interface Props {
   idee: Idea[];
   setIdee: Dispatch<SetStateAction<Idea[]>>;
-  preferenze: PreferenzeSito;
-  setPreferenze: Dispatch<SetStateAction<PreferenzeSito>>;
   inCorso: boolean;
   errore: string | null;
   onGenera: () => void;
@@ -58,15 +56,6 @@ export default function IdeeTab(p: Props) {
   return (
     <div className="sd-vista">
       <div className="sd-riga between">
-        <label className="sd-toggle">
-          <input
-            type="checkbox"
-            checked={p.preferenze.ideeLunedi}
-            onChange={(e) => p.setPreferenze((x) => ({ ...x, ideeLunedi: e.target.checked }))}
-          />
-          <span className="sw" />
-          Ogni lunedì, tre idee nuove all'apertura di JarAI
-        </label>
         <button className="btn primary" onClick={p.onGenera} disabled={p.inCorso}>
           {p.inCorso ? '◌ JarAI sta cercando idee…' : '✦ Proponi nuove idee'}
         </button>

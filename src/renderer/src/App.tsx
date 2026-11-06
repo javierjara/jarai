@@ -28,13 +28,12 @@ export default function App() {
   const conStudioDigitale = funzioni.includes('studio_digitale');
   const [ideeSito, setIdeeSito] = useState<Idea[]>([]);
   const [preferenzeSito, setPreferenzeSito] = useState<PreferenzeSito>(PREFERENZE_SITO_DEFAULT);
-  // Risposte dell'assistente, idee del lunedì e pubblicazioni programmate:
+  // Risposte dell'assistente, idee e pubblicazioni programmate:
   // gestite qui per non perderle fuori dalla sezione Studio digitale.
   const studioDigitaleApi = useStudioDigitale({
     attivo: pronto && conStudioDigitale,
     setConversazioni: setStudioDigitale,
     setIdee: setIdeeSito,
-    preferenze: preferenzeSito,
     setPreferenze: setPreferenzeSito,
   });
 

@@ -87,8 +87,6 @@ export interface Idea {
 }
 
 export interface PreferenzeSito {
-  /** Tre idee nuove il lunedì, alla prima apertura di JarAI dopo le 8. */
-  ideeLunedi: boolean;
   ultimeIdeeIl?: string;
   /** Articoli a settimana (obiettivo nel calendario). */
   obiettivoSettimana: number;

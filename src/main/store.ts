@@ -75,7 +75,6 @@ const ideaSchema = z.object({
 });
 
 const preferenzeSitoSchema = z.object({
-  ideeLunedi: z.boolean(),
   ultimeIdeeIl: z.string().optional(),
   obiettivoSettimana: z.number(),
 });

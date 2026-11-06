@@ -25,7 +25,9 @@ interface Props {
 // lavorazione con anteprime social, statistiche. L'assistente qui non vede
 // le pratiche (src/main/agentRunner.ts); nulla va online senza un clic.
 export default function StudioDigitaleView(p: Props) {
-  const [scheda, setScheda] = useState<Scheda>(() => (p.conversazioni.length ? 'articolo' : 'idee'));
+  // Si apre sempre sugli articoli su cui si sta lavorando, anche se non ce
+  // ne sono ancora: l'elenco vuoto lo dice da sé.
+  const [scheda, setScheda] = useState<Scheda>('articolo');
   const [attivaId, setAttivaId] = useState<string | null>(p.conversazioni[0]?.id ?? null);
   const [sito, setSito] = useState<{ collegato: boolean | null; url: string | null }>({ collegato: null, url: null });
   const [articoliSito, setArticoliSito] = useState<ArticoloPubblicato[]>([]);
@@ -85,11 +87,11 @@ export default function StudioDigitaleView(p: Props) {
           )}
         </div>
         <div className="sd-tabs">
+          <button className={scheda === 'articolo' ? 'on' : ''} onClick={() => setScheda('articolo')}>Articoli in lavorazione</button>
           <button className={scheda === 'idee' ? 'on' : ''} onClick={() => setScheda('idee')}>
             Idee {daValutare > 0 && <span className="n">{daValutare}</span>}
           </button>
           <button className={scheda === 'calendario' ? 'on' : ''} onClick={() => setScheda('calendario')}>Calendario</button>
-          <button className={scheda === 'articolo' ? 'on' : ''} onClick={() => setScheda('articolo')}>Articolo in lavorazione</button>
           <button className={scheda === 'statistiche' ? 'on' : ''} onClick={() => setScheda('statistiche')}>Statistiche</button>
         </div>
       </div>
@@ -99,8 +101,6 @@ export default function StudioDigitaleView(p: Props) {
           <IdeeTab
             idee={p.idee}
             setIdee={p.setIdee}
-            preferenze={p.preferenze}
-            setPreferenze={p.setPreferenze}
             inCorso={p.api.ideeInCorso}
             errore={p.api.erroreIdee}
             onGenera={() => p.api.generaIdee()}

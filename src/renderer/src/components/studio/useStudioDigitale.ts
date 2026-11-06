@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import type { Articolo, ConversazioneSito, Idea, Messaggio, PreferenzeSito } from '../../types';
 
 // Stato e automazioni dello Studio digitale, a livello di App: le risposte
-// dell'assistente, le idee del lunedì e le pubblicazioni programmate
-// arrivano anche se l'avvocato è in un'altra sezione.
+// dell'assistente, le idee e le pubblicazioni programmate arrivano anche se
+// l'avvocato è in un'altra sezione. Le idee si chiedono a Claude solo col
+// pulsante "Proponi nuove idee": mai da sole, perché ogni richiesta costa.
 
 export interface StatoLavoro {
   elaborando: boolean;
@@ -12,29 +13,19 @@ export interface StatoLavoro {
   parziale: string;
 }
 
-export const PREFERENZE_SITO_DEFAULT: PreferenzeSito = { ideeLunedi: true, obiettivoSettimana: 1 };
+export const PREFERENZE_SITO_DEFAULT: PreferenzeSito = { obiettivoSettimana: 1 };
 
 const nuovoId = () => crypto.randomUUID();
 const PREFISSO_IDEE = 'idee-';
-
-// Lunedì di questa settimana alle 8:00 (ora locale).
-function lunediOtto(ora = new Date()): Date {
-  const d = new Date(ora);
-  const giorno = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - giorno);
-  d.setHours(8, 0, 0, 0);
-  return d;
-}
 
 interface Args {
   attivo: boolean;
   setConversazioni: Dispatch<SetStateAction<ConversazioneSito[]>>;
   setIdee: Dispatch<SetStateAction<Idea[]>>;
-  preferenze: PreferenzeSito;
   setPreferenze: Dispatch<SetStateAction<PreferenzeSito>>;
 }
 
-export function useStudioDigitale({ attivo, setConversazioni, setIdee, preferenze, setPreferenze }: Args) {
+export function useStudioDigitale({ attivo, setConversazioni, setIdee, setPreferenze }: Args) {
   const [lavori, setLavori] = useState<Record<string, StatoLavoro>>({});
   const [ideeInCorso, setIdeeInCorso] = useState<string | null>(null);
   const [erroreIdee, setErroreIdee] = useState<string | null>(null);
@@ -156,18 +147,6 @@ export function useStudioDigitale({ attivo, setConversazioni, setIdee, preferenz
     },
     [ideeInCorso, setPreferenze],
   );
-
-  // Idee del lunedì: alla prima apertura dopo lunedì alle 8.
-  const lunediControllato = useRef(false);
-  useEffect(() => {
-    if (!attivo || lunediControllato.current) return;
-    lunediControllato.current = true;
-    if (!preferenze.ideeLunedi) return;
-    const soglia = lunediOtto();
-    if (Date.now() < soglia.getTime()) return;
-    if (preferenze.ultimeIdeeIl && Date.parse(preferenze.ultimeIdeeIl) >= soglia.getTime()) return;
-    generaIdee();
-  }, [attivo, preferenze.ideeLunedi, preferenze.ultimeIdeeIl, generaIdee]);
 
   // Pubblicazioni programmate eseguite dal main process.
   useEffect(() => {
