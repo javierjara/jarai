@@ -45,6 +45,7 @@ export const comandoSchema = z.discriminatedUnion('tipo', [
   comando('conversazione.ferma', z.object({ conversazioneId: z.string() })),
   comando('conversazione.rinomina', z.object({ conversazioneId: z.string(), titolo: z.string().min(1) })),
   comando('conversazione.elimina', z.object({ conversazioneId: z.string() })),
+  comando('conversazione.cambiaProcedura', z.object({ conversazioneId: z.string(), procedura: proceduraSchema })),
   comando(
     'conversazione.rispondiConferma',
     z.object({

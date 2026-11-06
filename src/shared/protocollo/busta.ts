@@ -7,6 +7,13 @@ import { eventoSchema } from './eventi';
 
 export const VERSIONE_PROTOCOLLO = 1;
 
+/**
+ * Dispositivo con cui l'host registra ciò che arriva dalla finestra dello
+ * stesso computer. Gli eventi con un altro dispositivo (telefono, desktop
+ * remoto) sono cambiamenti da mostrare: quelli locali la finestra li ha già.
+ */
+export const DISPOSITIVO_LOCALE = 'desktop';
+
 export const richiestaSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('snapshot.elenco') }),
   // Pratiche, documenti, impostazioni, idee, articoli. null finché la

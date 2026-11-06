@@ -142,6 +142,9 @@ function applica(stato: ProiezioneConversazione, evento: Evento): ProiezioneConv
     case 'conversazione_rinominata':
       return { ...stato, titolo: evento.payload.titolo };
 
+    case 'procedura_cambiata':
+      return { ...stato, procedura: evento.payload.procedura };
+
     case 'conversazione_eliminata':
       return { ...stato, eliminata: true, turno: null, conferme: [] };
 
@@ -392,6 +395,8 @@ function aggiornaRiepilogo(r: RiepilogoConversazione, evento: Evento): Riepilogo
   switch (evento.tipo) {
     case 'conversazione_rinominata':
       return { ...r, titolo: evento.payload.titolo };
+    case 'procedura_cambiata':
+      return { ...r, procedura: evento.payload.procedura };
     case 'messaggio_utente':
       return r.titolo ? r : { ...r, titolo: evento.payload.testo.slice(0, LUNGHEZZA_TITOLO) };
     case 'articolo':

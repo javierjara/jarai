@@ -43,6 +43,7 @@ export const eventoSchema = z.discriminatedUnion('tipo', [
     }),
   ),
   evento('conversazione_rinominata', z.object({ titolo: z.string() })),
+  evento('procedura_cambiata', z.object({ procedura: proceduraSchema })),
   evento('conversazione_eliminata', z.object({})),
   evento('messaggio_utente', z.object({ messaggioId: z.string(), testo: z.string() })),
   evento('turno_iniziato', z.object({ turnoId: z.string(), qualita: qualitaSchema })),

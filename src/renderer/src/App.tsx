@@ -9,6 +9,7 @@ import { PREFERENZE_SITO_DEFAULT, useStudioDigitale } from './components/studio/
 import { AVVOCATO_NOME, DOCUMENTI, PRATICHE, STUDIO_NOME } from './data/datiIniziali';
 import { caricaEntita, comando, useElenco } from './host';
 import { differenze, type StatoEntita } from './sincronizza';
+import { DISPOSITIVO_LOCALE } from '../../shared/protocollo/busta';
 import { AMBITI, PROCEDURE } from './types';
 import type { RiepilogoConversazione } from '../../shared/reducer';
 import type { Conversazione, ConversazioneSito, Documento, FileImportato, Idea, MainView, Pratica, PreferenzeSito, StatoPersistito, Studio } from './types';
@@ -85,41 +86,42 @@ export default function App() {
   const conJsonRef = useRef(false);
   // Ultimo stato che l'host conosce: il salvataggio manda solo le differenze.
   const salvatoRef = useRef<StatoEntita | null>(null);
+  const applicaEntita = useCallback((salvato: StatoPersistito) => {
+    const iniziale: StatoEntita = {
+      // cartellaTrovata non si salva: si ricalcola qui sotto.
+      pratiche: salvato.pratiche.map((p) => ({ ...p, cartellaTrovata: p.cartellaTrovata ?? true })),
+      documenti: salvato.documenti,
+      studio: salvato.studio ?? { nome: STUDIO_NOME, avvocato: AVVOCATO_NOME },
+      studioDigitale: salvato.studioDigitale ?? [],
+      ideeSito: salvato.ideeSito ?? [],
+      preferenzeSito: salvato.preferenzeSito ?? PREFERENZE_SITO_DEFAULT,
+    };
+    setPratiche(iniziale.pratiche);
+    setDocumenti(iniziale.documenti);
+    setStudio(iniziale.studio);
+    setStudioDigitale(iniziale.studioDigitale);
+    setIdeeSito(iniziale.ideeSito);
+    setPreferenzeSito(iniziale.preferenzeSito);
+    salvatoRef.current = iniziale;
+    // "Cartella non trovata" (spec §5.3): controllo leggero per ogni pratica
+    // legata a una cartella — rinominata o spostata, per esempio.
+    const percorsi = iniziale.pratiche.map((p) => p.cartellaPercorso).filter((p): p is string => !!p);
+    if (percorsi.length > 0) {
+      window.jarai.verificaCartelle(percorsi).then((trovate) => {
+        setPratiche((prev) => prev.map((p) => (p.cartellaPercorso ? { ...p, cartellaTrovata: trovate[p.cartellaPercorso] ?? false } : p)));
+      });
+    }
+  }, []);
+
   useEffect(() => {
     void (async () => {
       const entita = await caricaEntita();
       conJsonRef.current = entita === null;
       const salvato = (entita ?? (await window.jarai.dati.carica())) as StatoPersistito | null;
-      if (salvato) {
-        const iniziale: StatoEntita = {
-          // cartellaTrovata non si salva più: si ricalcola qui sotto.
-          pratiche: salvato.pratiche.map((p) => ({ ...p, cartellaTrovata: p.cartellaTrovata ?? true })),
-          documenti: salvato.documenti,
-          studio: salvato.studio ?? { nome: STUDIO_NOME, avvocato: AVVOCATO_NOME },
-          studioDigitale: salvato.studioDigitale ?? [],
-          ideeSito: salvato.ideeSito ?? [],
-          preferenzeSito: salvato.preferenzeSito ?? PREFERENZE_SITO_DEFAULT,
-        };
-        setPratiche(iniziale.pratiche);
-        setDocumenti(iniziale.documenti);
-        setStudio(iniziale.studio);
-        setStudioDigitale(iniziale.studioDigitale);
-        setIdeeSito(iniziale.ideeSito);
-        setPreferenzeSito(iniziale.preferenzeSito);
-        salvatoRef.current = iniziale;
-        // "Cartella non trovata" (spec §5.3): controllo leggero all'avvio per
-        // ogni pratica legata a una cartella — rinominata o spostata dopo
-        // l'ultima apertura di JarAI, per esempio.
-        const percorsi = iniziale.pratiche.map((p) => p.cartellaPercorso).filter((p): p is string => !!p);
-        if (percorsi.length > 0) {
-          window.jarai.verificaCartelle(percorsi).then((trovate) => {
-            setPratiche((prev) => prev.map((p) => (p.cartellaPercorso ? { ...p, cartellaTrovata: trovate[p.cartellaPercorso] ?? false } : p)));
-          });
-        }
-      }
+      if (salvato) applicaEntita(salvato);
       setPronto(true);
     })();
-  }, []);
+  }, [applicaEntita]);
 
   // Salvataggio a ogni cambiamento, con un piccolo debounce per non scrivere
   // a ogni tasto premuto (es. mentre si scrivono le note di una pratica).
@@ -162,6 +164,31 @@ export default function App() {
       if (salvaTimer.current) clearTimeout(salvaTimer.current);
     };
   }, [pronto, salva, pratiche, documenti, studio, studioDigitale, ideeSito, preferenzeSito]);
+
+  // Cambiamenti fatti da un altro dispositivo (telefono, desktop remoto):
+  // prima si salva quello che c'è in sospeso qui, poi si rilegge tutto.
+  // Quelli di questa finestra si ignorano: lo stato li contiene già.
+  useEffect(() => {
+    if (!pronto || conJsonRef.current) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const smetti = window.jarai.host.onEvento((e) => {
+      if (e.tipo !== 'entita_cambiata' || !e.dispositivoId || e.dispositivoId === DISPOSITIVO_LOCALE) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        void (async () => {
+          if (salvaTimer.current) clearTimeout(salvaTimer.current);
+          await salva();
+          const entita = await caricaEntita();
+          // Stessa forma dello snapshot di avvio (le pratiche senza cartellaTrovata).
+          if (entita) applicaEntita(entita as unknown as StatoPersistito);
+        })();
+      }, 300);
+    });
+    return () => {
+      clearTimeout(timer);
+      smetti();
+    };
+  }, [pronto, salva, applicaEntita]);
 
   // Prima di mandare una domanda: l'host deve già conoscere pratica e
   // documenti appena aggiunti.
@@ -386,7 +413,7 @@ function daRiepilogo(r: RiepilogoConversazione): Conversazione {
     procedura: r.procedura ?? PROCEDURE[0],
     stato: r.stato,
     aggiornataIl: r.aggiornataIl,
-    dispositivoOrigine: r.creataDa && r.creataDa !== 'desktop' ? 'telefono' : 'desktop',
+    dispositivoOrigine: r.creataDa && r.creataDa !== DISPOSITIVO_LOCALE ? 'telefono' : 'desktop',
     ...(r.attivita ? { attivitaCorrente: r.attivita } : {}),
     messaggi: [],
   };

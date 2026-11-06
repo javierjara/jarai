@@ -262,6 +262,12 @@ export class Host {
         return this.ok(this.scrivi([{ tipo: 'conversazione_rinominata', conversazioneId, ...da, payload: { titolo } }], comandoId));
       }
 
+      case 'conversazione.cambiaProcedura': {
+        const { conversazioneId, procedura } = comando.argomenti;
+        if (!this.elenco.conversazioni[conversazioneId]) return { ok: false, errore: MESSAGGI.nonTrovata };
+        return this.ok(this.scrivi([{ tipo: 'procedura_cambiata', conversazioneId, ...da, payload: { procedura } }], comandoId));
+      }
+
       case 'conversazione.elimina': {
         const { conversazioneId } = comando.argomenti;
         if (!this.elenco.conversazioni[conversazioneId]) return this.ok();

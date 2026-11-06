@@ -78,11 +78,38 @@ export function useStudioDigitale({ attivo, setConversazioni, setIdee, setPrefer
     });
   }, [setIdee]);
 
+  // Messaggi e stato dalla fonte di verità (l'host): compresa la risposta,
+  // l'articolo agganciato e l'eventuale errore già composto. creaSeManca:
+  // false per i turni di altri dispositivi su articoli che qui non ci sono.
+  const ricaricaMessaggi = useCallback(
+    (id: string, creaSeManca: boolean) => {
+      void window.jarai.host
+        .busta({ v: 1, tipo: 'richiesta', id: nuovoId(), richiesta: { tipo: 'snapshot.conversazione', conversazioneId: id } })
+        .then((r) => {
+          const c =
+            r.tipo === 'risposta' && r.esito.ok && 'dati' in r.esito
+              ? (r.esito.dati as { conversazione: ProiezioneConversazione | null }).conversazione
+              : null;
+          if (!c || c.modalita !== 'studio-digitale') return;
+          const cambia = (x: ConversazioneSito): ConversazioneSito => ({ ...x, messaggi: c.messaggi, stato: c.stato, aggiornataIl: c.aggiornataIl });
+          if (creaSeManca) aggiorna(id, cambia);
+          else setConversazioni((prev) => prev.map((x) => (x.id === id ? cambia(x) : x)));
+        });
+    },
+    [aggiorna, setConversazioni],
+  );
+
   // Articoli: eventi dall'host.
   useEffect(() => {
     return window.jarai.host.onEvento((evento) => {
       const id = evento.conversazioneId;
-      if (!id || !inCorso.current.has(id)) return;
+      if (!id) return;
+      // Risposta partita da un altro dispositivo: a fine turno si rileggono
+      // i messaggi, se l'articolo è tra quelli di questa finestra.
+      if (!inCorso.current.has(id)) {
+        if (evento.tipo === 'turno_finito') ricaricaMessaggi(id, false);
+        return;
+      }
       switch (evento.tipo) {
         case 'attivita':
           setLavoro(id, { attivita: evento.payload.testo });
@@ -101,18 +128,11 @@ export function useStudioDigitale({ attivo, setConversazioni, setIdee, setPrefer
           inCorso.current.delete(id);
           delete parziali.current[id];
           setLavoro(id, { elaborando: false, attivita: null, parziale: '' });
-          // Messaggi e stato dalla fonte di verità: compresa la risposta,
-          // l'articolo agganciato e l'eventuale errore già composto.
-          void window.jarai.host
-            .busta({ v: 1, tipo: 'richiesta', id: nuovoId(), richiesta: { tipo: 'snapshot.conversazione', conversazioneId: id } })
-            .then((r) => {
-              const c = r.tipo === 'risposta' && r.esito.ok && 'dati' in r.esito ? (r.esito.dati as { conversazione: ProiezioneConversazione | null }).conversazione : null;
-              if (c) aggiorna(id, (x) => ({ ...x, messaggi: c.messaggi, stato: c.stato, aggiornataIl: c.aggiornataIl }));
-            });
+          ricaricaMessaggi(id, true);
           return;
       }
     });
-  }, [aggiorna]);
+  }, [aggiorna, ricaricaMessaggi]);
 
   // testoVisibile resta nella conversazione; testoAgente (con l'articolo
   // modificato a mano, se serve) va all'assistente.

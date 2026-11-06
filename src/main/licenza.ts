@@ -1,4 +1,5 @@
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
+import { leggiCifrato, scriviCifrato } from './segreti';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { cartellaConfigurazioneClaude, leggiChiave } from './claudeAuth';
@@ -16,20 +17,11 @@ export const URL_PROXY = process.env.JARAI_PROXY_URL ?? 'https://jarai-proxy.jar
 const LICENZA_PATH = () => join(app.getPath('userData'), 'jarai-licenza.enc');
 
 export async function leggiLicenza(): Promise<string | null> {
-  try {
-    const cifrata = await fs.readFile(LICENZA_PATH());
-    if (!safeStorage.isEncryptionAvailable()) return null;
-    return safeStorage.decryptString(cifrata);
-  } catch {
-    return null;
-  }
+  return leggiCifrato(LICENZA_PATH());
 }
 
 async function scriviLicenza(licenza: string): Promise<void> {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('La cifratura del sistema non è disponibile su questo computer.');
-  }
-  await fs.writeFile(LICENZA_PATH(), safeStorage.encryptString(licenza));
+  await scriviCifrato(LICENZA_PATH(), licenza);
 }
 
 export async function rimuoviLicenza(): Promise<void> {

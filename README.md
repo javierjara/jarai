@@ -169,11 +169,15 @@ confinato alla sottocartella delle bozze, mai sugli originali (spec §0.3).
 ## Sviluppo
 
 ```bash
-npm install
+pnpm install       # il progetto usa pnpm (pnpm-lock.yaml)
 npm run dev        # avvia l'app Electron in sviluppo
 npm run typecheck
-npm run build       # build di produzione (main + preload + renderer)
+npm test           # test (vitest): protocollo, reducer, EventStore, host
+npm run build      # build di produzione (main + preload + renderer)
 ```
+
+Per provare su una copia dei dati invece che su quelli veri (solo in
+sviluppo): `JARAI_USER_DATA=/percorso/copia npm run dev`.
 
 Per provare il collegamento a Claude: Impostazioni → Collegamento Claude →
 incolla una chiave API Anthropic (`sk-ant-…`) e Salva, **oppure** "Accedi

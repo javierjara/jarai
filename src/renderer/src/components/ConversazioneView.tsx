@@ -106,7 +106,14 @@ export default function ConversazioneView({ pratiche, praticaId, conversazioneId
             <select
               className="procedura-select"
               value={procedura}
-              onChange={(e) => setProcedura(e.target.value as Procedura)}
+              onChange={(e) => {
+                const scelta = e.target.value as Procedura;
+                setProcedura(scelta);
+                // Conversazione già nata: la scelta si salva nell'host.
+                if (conversazione) {
+                  void comando({ tipo: 'conversazione.cambiaProcedura', argomenti: { conversazioneId: idRef.current, procedura: scelta } });
+                }
+              }}
             >
               {PROCEDURE.map((p) => (
                 <option key={p} value={p}>

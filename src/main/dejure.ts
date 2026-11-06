@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, safeStorage, session, type Session, type WebFrameMain } from 'electron';
+import { app, BrowserWindow, ipcMain, session, type Session, type WebFrameMain } from 'electron';
+import { leggiCifrato, scriviCifrato } from './segreti';
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
@@ -48,17 +49,13 @@ export interface StatoDejure {
 // ─── Credenziali e stato ────────────────────────────────────────────────
 
 async function salvaCredenziali(cred: Credenziali): Promise<void> {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('La cifratura del sistema non è disponibile su questo computer.');
-  }
-  await fs.writeFile(CREDENZIALI_PATH(), safeStorage.encryptString(JSON.stringify(cred)));
+  await scriviCifrato(CREDENZIALI_PATH(), JSON.stringify(cred));
 }
 
 async function leggiCredenziali(): Promise<Credenziali | null> {
+  const testo = await leggiCifrato(CREDENZIALI_PATH());
   try {
-    const cifrate = await fs.readFile(CREDENZIALI_PATH());
-    if (!safeStorage.isEncryptionAvailable()) return null;
-    return JSON.parse(safeStorage.decryptString(cifrate)) as Credenziali;
+    return testo ? (JSON.parse(testo) as Credenziali) : null;
   } catch {
     return null;
   }

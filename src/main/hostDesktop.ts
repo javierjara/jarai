@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { apriDatabase } from '../core/db';
 import { Host, type EventoMotore, type Motore } from '../core/host';
+import { DISPOSITIVO_LOCALE } from '../shared/protocollo';
 import { MIGRAZIONE_CONVERSAZIONI, MIGRAZIONE_RESTO, migraConversazioniPratica, migraResto, migrazioneFatta } from '../core/migrazioneJson';
 import { fermaMessaggio, inviaMessaggio, type EventoAgente } from './agentRunner';
 import { registraErroreGrezzo } from './logger';
@@ -18,7 +19,6 @@ const DB_PATH = () => join(app.getPath('userData'), 'jarai.db');
 // Copia del JSON presa prima della migrazione: la via di ritorno.
 const COPIA_PATH = () => join(app.getPath('userData'), 'jarai-dati.prima-di-jarai-db.json');
 const RINOMINATO_PATH = () => join(app.getPath('userData'), `jarai-dati.migrato-${new Date().toISOString().slice(0, 10)}.json`);
-const DISPOSITIVO_DESKTOP = 'desktop';
 
 export interface HostDesktop {
   host: Host;
@@ -91,7 +91,7 @@ export async function avviaHost(getWindow: () => BrowserWindow | null): Promise<
     if (win && !win.isDestroyed()) win.webContents.send('jarai:evento', evento);
   });
 
-  ipcMain.handle('jarai:busta', (_event, busta: unknown) => host.gestisciBusta(busta, { dispositivoId: DISPOSITIVO_DESKTOP }));
+  ipcMain.handle('jarai:busta', (_event, busta: unknown) => host.gestisciBusta(busta, { dispositivoId: DISPOSITIVO_LOCALE }));
 
   return { host, conversazioniNelDatabase: () => migrate };
 }

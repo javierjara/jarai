@@ -202,6 +202,15 @@ describe('Host: errori, interruzioni, regole', () => {
     expect(motore.richieste).toHaveLength(1);
   });
 
+  it('la procedura si può cambiare dopo il primo messaggio', async () => {
+    const { host, crea, comando } = prepara();
+    await crea();
+    await comando({ tipo: 'conversazione.cambiaProcedura', argomenti: { conversazioneId: 'c1', procedura: 'Revisione contratto' } });
+    expect(host.conversazione('c1')!.procedura).toBe('Revisione contratto');
+    const { elenco } = host.richiedi({ tipo: 'snapshot.elenco' }) as { elenco: { conversazioni: Record<string, { procedura: string }> } };
+    expect(elenco.conversazioni.c1.procedura).toBe('Revisione contratto');
+  });
+
   it('conversazione inesistente o eliminata', async () => {
     const { host, crea, invia, comando } = prepara();
     expect(await invia('?', 'nessuna')).toEqual({ ok: false, errore: MESSAGGI.nonTrovata });

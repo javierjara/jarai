@@ -1,4 +1,5 @@
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
+import { cifraturaDisponibile, leggiCifrato, MESSAGGIO_CIFRATURA_ASSENTE, scriviCifrato } from '../segreti';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { lexicalATesto, markdownALexical } from './lexical';
@@ -91,19 +92,16 @@ export class ErroreSito extends Error {}
 // ─── Credenziali ────────────────────────────────────────────────────────
 
 async function salvaCredenziali(cred: Credenziali): Promise<void> {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new ErroreSito('La cifratura del sistema non è disponibile su questo computer.');
-  }
-  await fs.writeFile(CREDENZIALI_PATH(), safeStorage.encryptString(JSON.stringify(cred)));
+  if (!(await cifraturaDisponibile())) throw new ErroreSito(MESSAGGIO_CIFRATURA_ASSENTE);
+  await scriviCifrato(CREDENZIALI_PATH(), JSON.stringify(cred));
   const stato: StatoSalvato = { url: cred.url, email: cred.email, collegatoIl: new Date().toISOString() };
   await fs.writeFile(STATO_PATH(), JSON.stringify(stato));
 }
 
 async function leggiCredenziali(): Promise<Credenziali | null> {
+  const testo = await leggiCifrato(CREDENZIALI_PATH());
   try {
-    const cifrate = await fs.readFile(CREDENZIALI_PATH());
-    if (!safeStorage.isEncryptionAvailable()) return null;
-    return JSON.parse(safeStorage.decryptString(cifrate)) as Credenziali;
+    return testo ? (JSON.parse(testo) as Credenziali) : null;
   } catch {
     return null;
   }

@@ -1,4 +1,5 @@
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
+import { leggiCifrato, scriviCifrato } from './segreti';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
@@ -30,21 +31,11 @@ export function cartellaConfigurazioneClaude(): string {
 }
 
 export async function salvaChiave(chiave: string): Promise<void> {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('La cifratura del sistema non è disponibile su questo computer.');
-  }
-  const cifrata = safeStorage.encryptString(chiave);
-  await fs.writeFile(CHIAVE_PATH(), cifrata);
+  await scriviCifrato(CHIAVE_PATH(), chiave);
 }
 
 export async function leggiChiave(): Promise<string | null> {
-  try {
-    const cifrata = await fs.readFile(CHIAVE_PATH());
-    if (!safeStorage.isEncryptionAvailable()) return null;
-    return safeStorage.decryptString(cifrata);
-  } catch {
-    return null;
-  }
+  return leggiCifrato(CHIAVE_PATH());
 }
 
 export async function rimuoviChiave(): Promise<void> {
