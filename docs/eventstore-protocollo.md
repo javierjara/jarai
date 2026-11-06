@@ -273,7 +273,7 @@ I dati d'esempio (`datiIniziali.ts`) vengono creati dall'host al primo avvio
 2. **Protocollo + reducer** in `src/shared/`, con test unitari (vitest). ✅ `src/shared/protocollo/`, `src/shared/reducer.ts`, `npm test`.
    *Fatto quando:* applicando gli eventi di una conversazione reale si
    ottengono gli stessi `Messaggio[]` che produce oggi `ConversazioneView`.
-3. **EventStore + migrazioni DB + migrazione JSON**.
+3. **EventStore + migrazioni DB + migrazione JSON**. ✅ `src/core/{db,migrazioni,eventStore,migrazioneJson}.ts`. La rinomina di `jarai-dati.json` e l'avvio della migrazione all'apertura dell'app arrivano con il passo 4, insieme all'host.
    *Fatto quando:* un `jarai-dati.json` reale viene migrato e riletto senza
    perdite (test con fixture).
 4. **Host + trasporto IPC + agentRunner sull'host**. Le conversazioni (pratica
