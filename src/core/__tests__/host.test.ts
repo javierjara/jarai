@@ -336,3 +336,45 @@ describe('Host: entità (passo 5)', () => {
     expect(entita(host)!.studioDigitale[0].messaggi).toEqual([]);
   });
 });
+
+describe('bozza.esporta (file per il telefono)', () => {
+  const richiesta = (formato: 'word' | 'pdf', titolo = 'Atto: Rossi / Bianchi') => ({
+    v: 1,
+    tipo: 'richiesta',
+    id: 'r1',
+    richiesta: { tipo: 'bozza.esporta', titolo, contenuto: '## Fatto\n\nTesto.', formato },
+  });
+
+  it('restituisce il file in base64 con un nome sicuro e il tipo giusto', async () => {
+    const chiamate: string[] = [];
+    const host = new Host(apriDatabase(':memory:'), new MotoreFinto(), {
+      esportaBozza: async (b, formato) => {
+        chiamate.push(`${formato}:${b.contenuto}`);
+        return new Uint8Array([1, 2, 3]);
+      },
+    });
+    const r = await host.gestisciBusta(richiesta('word'));
+    expect(r).toMatchObject({
+      tipo: 'risposta',
+      id: 'r1',
+      esito: {
+        ok: true,
+        dati: { nome: 'Atto Rossi Bianchi.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', base64: 'AQID' },
+      },
+    });
+    const pdf = await host.gestisciBusta(richiesta('pdf', ''));
+    expect(pdf).toMatchObject({ esito: { ok: true, dati: { nome: 'Bozza.pdf', mime: 'application/pdf' } } });
+    expect(chiamate).toEqual(['word:## Fatto\n\nTesto.', 'pdf:## Fatto\n\nTesto.']);
+  });
+
+  it('senza esportatore, o se fallisce: errore leggibile', async () => {
+    const senza = new Host(apriDatabase(':memory:'), new MotoreFinto());
+    expect(await senza.gestisciBusta(richiesta('word'))).toMatchObject({ esito: { ok: false } });
+    const rotto = new Host(apriDatabase(':memory:'), new MotoreFinto(), {
+      esportaBozza: async () => {
+        throw new Error('stampa');
+      },
+    });
+    expect(await rotto.gestisciBusta(richiesta('pdf'))).toMatchObject({ esito: { ok: false, errore: 'Non sono riuscito a preparare il documento.' } });
+  });
+});

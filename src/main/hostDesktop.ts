@@ -9,6 +9,8 @@ import { DISPOSITIVO_LOCALE } from '../shared/protocollo';
 import { MIGRAZIONE_CONVERSAZIONI, MIGRAZIONE_RESTO, migraConversazioniPratica, migraResto, migrazioneFatta } from '../core/migrazioneJson';
 import { fermaMessaggio, inviaMessaggio, type EventoAgente } from './agentRunner';
 import { registraErroreGrezzo } from './logger';
+import { generaDocxBuffer } from './bozze';
+import { generaPdfBuffer } from './pdfExport';
 import { caricaDati, DATI_PATH } from './store';
 
 // L'host sul desktop (docs/eventstore-protocollo.md, passi 4 e 5): jarai.db
@@ -87,6 +89,8 @@ export async function avviaHost(getWindow: () => BrowserWindow | null): Promise<
 
   const host = new Host(db, motoreDesktop, {
     registraErrore: (contesto, dettaglio) => void registraErroreGrezzo(`host ${contesto}`, dettaglio),
+    // Il telefono chiede il file di una bozza: stessa impaginazione di "Salva in Word/PDF".
+    esportaBozza: async ({ contenuto }, formato) => (formato === 'word' ? generaDocxBuffer(contenuto) : generaPdfBuffer(contenuto)),
   });
 
   host.abbona((evento) => {

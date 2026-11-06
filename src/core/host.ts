@@ -6,6 +6,8 @@ import {
   type Comando,
   type Documento,
   type EsitoComando,
+  type FileEsportato,
+  type FormatoBozza,
   type Evento,
   type IdeaProposta,
   type LavoroDocumento,
@@ -85,6 +87,8 @@ export interface OpzioniHost {
   nuovoId?: () => string;
   /** Per gli errori interni: mai contenuto delle pratiche, solo il motivo tecnico. */
   registraErrore?: (contesto: string, dettaglio: string) => void;
+  /** Word/PDF di una bozza (sul desktop: docx e stampa di Chromium). */
+  esportaBozza?: (bozza: { titolo: string; contenuto: string }, formato: FormatoBozza) => Promise<Uint8Array>;
 }
 
 export interface Origine {
@@ -116,6 +120,7 @@ export class Host {
   private readonly orologio: () => string;
   private readonly nuovoId: () => string;
   private readonly registraErrore: (contesto: string, dettaglio: string) => void;
+  private readonly esportaBozza: OpzioniHost['esportaBozza'];
   private elenco: ProiezioneElenco = ELENCO_VUOTO;
   private readonly cache = new Map<string, ProiezioneConversazione>();
   private readonly abbonati = new Set<(evento: Evento) => void>();
@@ -129,6 +134,7 @@ export class Host {
     this.orologio = opzioni.orologio ?? (() => new Date().toISOString());
     this.nuovoId = opzioni.nuovoId ?? (() => crypto.randomUUID());
     this.registraErrore = opzioni.registraErrore ?? (() => undefined);
+    this.esportaBozza = opzioni.esportaBozza;
     this.store = new EventStore(db, this.orologio);
 
     for (let seq = 0; ; ) {
@@ -152,6 +158,9 @@ export class Host {
     const busta = parsed.data;
     if (busta.tipo === 'comando') {
       return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: await this.esegui(busta.comando, origine) };
+    }
+    if (busta.tipo === 'richiesta' && busta.richiesta.tipo === 'bozza.esporta') {
+      return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: await this.esporta(busta.richiesta) };
     }
     if (busta.tipo === 'richiesta') {
       return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: { ok: true, dati: this.richiedi(busta.richiesta) } };
@@ -182,6 +191,28 @@ export class Host {
         // Con IPC la finestra riceve già tutto; un trasporto remoto userà
         // l'elenco per filtrare.
         return {};
+      case 'bozza.esporta':
+        return {}; // asincrona: la gestisce esporta()
+    }
+  }
+
+  private async esporta(r: Extract<Richiesta, { tipo: 'bozza.esporta' }>): Promise<EsitoComando | { ok: true; dati: FileEsportato }> {
+    if (!this.esportaBozza) return { ok: false, errore: 'Esportazione non disponibile su questo computer.' };
+    try {
+      const byte = await this.esportaBozza({ titolo: r.titolo, contenuto: r.contenuto }, r.formato);
+      const base = (r.titolo.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Bozza').slice(0, 80);
+      const word = r.formato === 'word';
+      return {
+        ok: true,
+        dati: {
+          nome: `${base}.${word ? 'docx' : 'pdf'}`,
+          mime: word ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/pdf',
+          base64: Buffer.from(byte).toString('base64'),
+        },
+      };
+    } catch (err) {
+      this.registraErrore('esporta', err instanceof Error ? err.message : String(err));
+      return { ok: false, errore: 'Non sono riuscito a preparare il documento.' };
     }
   }
 

@@ -29,7 +29,24 @@ export const richiestaSchema = z.discriminatedUnion('tipo', [
     tipo: z.literal('abbona'),
     conversazioni: z.union([z.literal('tutte'), z.array(z.string())]),
   }),
+  // Il file Word o PDF di una bozza, generato sul computer con la stessa
+  // impaginazione del desktop (il telefono non ha il motore di stampa).
+  z.object({
+    tipo: z.literal('bozza.esporta'),
+    titolo: z.string().max(300),
+    contenuto: z.string().max(400_000),
+    formato: z.enum(['word', 'pdf']),
+  }),
 ]);
+export type FormatoBozza = 'word' | 'pdf';
+
+/** Risposta di bozza.esporta. */
+export interface FileEsportato {
+  nome: string;
+  mime: string;
+  /** Contenuto in base64. */
+  base64: string;
+}
 export type Richiesta = z.infer<typeof richiestaSchema>;
 
 export const bustaSchema = z.discriminatedUnion('tipo', [
