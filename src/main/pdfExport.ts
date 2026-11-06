@@ -24,7 +24,7 @@ const STILE = `
 `;
 
 function markdownInHtml(markdown: string): string {
-  const corpo = marked.parse(markdown, { async: false }) as string;
+  const corpo = marked.parse(markdown, { async: false, breaks: true }) as string;
   return `<!doctype html><html><head><meta charset="utf-8"><style>${STILE}</style></head><body>${corpo}</body></html>`;
 }
 
