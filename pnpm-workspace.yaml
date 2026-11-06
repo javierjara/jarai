@@ -1,4 +1,6 @@
 allowBuilds:
-  electron: set this to true or false
-  esbuild: set this to true or false
-  tesseract.js: set this to true or false
+  electron: true
+  esbuild: true
+  tesseract.js: false
+minimumReleaseAgeExclude:
+  - electron@45.2.3

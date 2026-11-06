@@ -44,7 +44,7 @@
     "@types/word-extractor": "^1.0.6",
     "@types/yauzl": "^3.4.0",
     "@vitejs/plugin-react": "^4.6.0",
-    "electron": "^33.2.0",
+    "electron": "45.2.3",
     "electron-builder": "^25.1.8",
     "electron-vite": "^5.0.0",
     "typescript": "~5.8.3",

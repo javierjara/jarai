@@ -39,10 +39,9 @@ export async function generaPdfBuffer(markdown: string): Promise<Buffer> {
   try {
     await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     return await win.webContents.printToPDF({
-      // marginType 'custom' obbligatorio perché top/bottom/left/right siano
-      // usati — i valori sono in pixel (96px = 1 pollice), stessi margini
-      // in pollici del .docx generato da bozze.ts (1"/1.2").
-      margins: { marginType: 'custom', top: 96, bottom: 96, left: 115, right: 115 },
+      // Valori in pollici (API printToPDF attuale; marginType non esiste
+      // più): stessi margini del .docx generato da bozze.ts (1"/1.2").
+      margins: { top: 1, bottom: 1, left: 1.2, right: 1.2 },
       pageSize: 'A4',
       printBackground: false,
     });
