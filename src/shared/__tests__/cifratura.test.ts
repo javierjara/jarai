@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cifra, decifra, derivaChiavi, esportaPrivata, generaCoppia, importaPrivata, pubblicaDaPrivata } from '../cifratura';
+import { cifra, decifra, derivaChiavi, generaCoppia, pubblicaDaPrivata } from '../cifratura';
 
 describe('cifratura end-to-end', () => {
   it('desktop e telefono ricavano le stesse chiavi e si leggono a vicenda', async () => {
@@ -43,11 +43,35 @@ describe('cifratura end-to-end', () => {
 
   it('la chiave privata si conserva e si ritrova, con la sua pubblica', async () => {
     const c = await generaCoppia();
-    const jwk = await esportaPrivata(c.privata);
-    expect(await pubblicaDaPrivata(jwk)).toBe(c.pubblica);
+    expect(await pubblicaDaPrivata(c.privata)).toBe(c.pubblica);
     const altro = await generaCoppia();
     const prima = await derivaChiavi(c.privata, altro.pubblica, 's');
-    const dopo = await derivaChiavi(await importaPrivata(jwk), altro.pubblica, 's');
+    const dopo = await derivaChiavi(c.privata, altro.pubblica, 's');
     expect(await decifra(dopo.versoDesktop, await cifra(prima.versoDesktop, 'ok'))).toBe('ok');
+  });
+});
+
+describe('compatibilità con WebCrypto', () => {
+  // Stesso schema dello standard: un'altra implementazione (es. WebCrypto
+  // nativa in futuro) deve ricavare le stesse chiavi.
+  it('stesso segreto ECDH + HKDF di crypto.subtle', async () => {
+    const { webcrypto } = await import('node:crypto');
+    const s = webcrypto.subtle;
+    const a = await generaCoppia();
+    const b = (await s.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])) as CryptoKeyPair;
+    const pubB = Buffer.from(await s.exportKey('raw', b.publicKey)).toString('base64url');
+    const nostre = await derivaChiavi(a.privata, pubB, 'h:t');
+    const pubA = await s.importKey('raw', Buffer.from(a.pubblica, 'base64url'), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+    const bits = await s.deriveBits({ name: 'ECDH', public: pubA }, b.privateKey, 256);
+    const base = await s.importKey('raw', bits, 'HKDF', false, ['deriveBits']);
+    const loro = new Uint8Array(
+      await s.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: Buffer.from('h:t'), info: Buffer.from('jarai v1 telefono→desktop') }, base, 256),
+    );
+    expect(Buffer.from(nostre.versoDesktop).toString('hex')).toBe(Buffer.from(loro).toString('hex'));
+    // E AES-GCM: cifrato da noi, letto da WebCrypto.
+    const dati = Buffer.from(await cifra(nostre.versoDesktop, 'àèì € 😀'), 'base64url');
+    const k = await s.importKey('raw', loro, 'AES-GCM', false, ['decrypt']);
+    const chiaro = await s.decrypt({ name: 'AES-GCM', iv: dati.subarray(0, 12) }, k, dati.subarray(12));
+    expect(new TextDecoder().decode(chiaro)).toBe('àèì € 😀');
   });
 });

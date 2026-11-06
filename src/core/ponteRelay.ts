@@ -26,7 +26,7 @@ export interface IdentitaDesktop {
   hostId: string;
   /** Lega la stanza del relay a questo computer. */
   segreto: string;
-  privata: CryptoKey;
+  privata: string;
   pubblica: string;
 }
 

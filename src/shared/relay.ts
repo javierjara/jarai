@@ -1,5 +1,5 @@
 import { CHIUSURA, type Canale } from './clienteRemoto';
-import { casuale, cifra, decifra, derivaChiavi, generaCoppia, esportaPrivata, importaPrivata, impronta, type ChiaviSessione } from './cifratura';
+import { casuale, cifra, decifra, derivaChiavi, generaCoppia, impronta, type ChiaviSessione } from './cifratura';
 
 // Telefono ↔ relay ↔ desktop (jarai-relay). Questo file è la parte che gira
 // sul telefono (app React Native, test) più il formato del QR e i messaggi
@@ -40,7 +40,8 @@ export interface CredenzialiTelefono {
   hostId: string;
   dispositivoId: string;
   token: string;
-  privata: JsonWebKey;
+  /** Chiave privata del telefono (base64url). */
+  privata: string;
   chiaveDesktop: string;
   nomeComputer?: string;
 }
@@ -147,7 +148,7 @@ export async function abbinaTelefono(invito: InvitoAbbinamento, nomeTelefono: st
     hostId: invito.hostId,
     dispositivoId,
     token,
-    privata: await esportaPrivata(coppia.privata),
+    privata: coppia.privata,
     chiaveDesktop: invito.chiave,
     nomeComputer: esito.nome ?? invito.nome,
   };
@@ -173,7 +174,7 @@ export function canaleRelay(credenziali: CredenzialiTelefono): Canale {
   let codaOut: Promise<void> = Promise.resolve();
   const pronte = (async () => {
     chiavi = await derivaChiavi(
-      await importaPrivata(credenziali.privata),
+      credenziali.privata,
       credenziali.chiaveDesktop,
       salePer(credenziali.hostId, credenziali.dispositivoId),
     );

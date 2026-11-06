@@ -6,6 +6,7 @@ import {
   type Evento,
   type Richiesta,
 } from './protocollo';
+import { casuale } from './cifratura';
 import { ELENCO_VUOTO, riduciConversazione, riduciElenco, type ProiezioneConversazione, type ProiezioneElenco } from './reducer';
 
 // Client remoto dell'host (passo 6 e poi telefono): canale, cursore,
@@ -64,7 +65,8 @@ export interface OpzioniClienteRemoto {
   recuperoMassimo?: number;
 }
 
-const nuovoId = () => crypto.randomUUID();
+// crypto.randomUUID non c'è in React Native.
+const nuovoId = () => casuale(16);
 
 export class ClienteRemoto {
   elenco: ProiezioneElenco = ELENCO_VUOTO;

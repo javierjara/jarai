@@ -1,81 +1,67 @@
+import { gcm } from '@noble/ciphers/aes.js';
+import { p256 } from '@noble/curves/nist.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+
 // Cifratura end-to-end tra desktop e telefono (spec §9.4). Il relay inoltra
 // solo testo cifrato: non conosce le chiavi e non può leggere né alterare
 // niente senza che il destinatario se ne accorga.
 //
-// - Chiavi: ECDH P-256 (supportato ovunque: Node, Electron, browser, e in
-//   React Native con un modulo WebCrypto). Desktop e telefono hanno ognuno
-//   la sua coppia; le pubbliche si scambiano con il QR e con l'abbinamento.
-// - Dal segreto comune, HKDF-SHA256 ricava due chiavi AES-GCM 256, una per
-//   direzione, legate a quel computer e a quel telefono (sale).
+// - Chiavi: ECDH P-256. Desktop e telefono hanno ognuno la sua coppia; le
+//   pubbliche si scambiano con il QR e con l'abbinamento.
+// - Dal segreto comune (coordinata x, come WebCrypto), HKDF-SHA256 ricava due
+//   chiavi AES-GCM 256, una per direzione, legate a quel computer e a quel
+//   telefono (sale).
 // - Ogni messaggio: IV casuale di 12 byte + testo cifrato con tag.
 //
-// Solo WebCrypto standard (globalThis.crypto.subtle).
+// Librerie @noble (JavaScript puro, verificate): lo stesso codice gira in
+// Electron, Node e React Native (Hermes non ha WebCrypto). L'unica cosa
+// richiesta all'ambiente è crypto.getRandomValues.
 
-const ECDH = { name: 'ECDH', namedCurve: 'P-256' } as const;
 const VERSO_DESKTOP = 'jarai v1 telefono→desktop';
 const VERSO_TELEFONO = 'jarai v1 desktop→telefono';
 
 export interface CoppiaDiChiavi {
-  /** Chiave pubblica grezza (65 byte) in base64url: va nel QR. */
+  /** Chiave pubblica non compressa (65 byte) in base64url: va nel QR. */
   pubblica: string;
-  privata: CryptoKey;
+  /** Chiave privata (32 byte) in base64url: da conservare cifrata (portachiavi). */
+  privata: string;
 }
 
 export interface ChiaviSessione {
-  versoDesktop: CryptoKey;
-  versoTelefono: CryptoKey;
+  versoDesktop: Uint8Array;
+  versoTelefono: Uint8Array;
 }
-
-const subtle = () => globalThis.crypto.subtle;
 
 export async function generaCoppia(): Promise<CoppiaDiChiavi> {
-  const coppia = (await subtle().generateKey(ECDH, true, ['deriveBits'])) as CryptoKeyPair;
-  return { pubblica: await esportaPubblica(coppia.publicKey), privata: coppia.privateKey };
-}
-
-async function esportaPubblica(chiave: CryptoKey): Promise<string> {
-  return base64url(new Uint8Array(await subtle().exportKey('raw', chiave)));
-}
-
-/** Per conservarla (cifrata) sul dispositivo. */
-export async function esportaPrivata(privata: CryptoKey): Promise<JsonWebKey> {
-  return subtle().exportKey('jwk', privata);
-}
-
-export async function importaPrivata(jwk: JsonWebKey): Promise<CryptoKey> {
-  return subtle().importKey('jwk', jwk, ECDH, true, ['deriveBits']);
+  const privata = p256.utils.randomSecretKey();
+  return { privata: base64url(privata), pubblica: base64url(p256.getPublicKey(privata, false)) };
 }
 
 /** Pubblica ricavata dalla privata salvata (per non doverla conservare a parte). */
-export async function pubblicaDaPrivata(jwk: JsonWebKey): Promise<string> {
-  const { d: _d, key_ops: _o, ...pubblica } = jwk;
-  const chiave = await subtle().importKey('jwk', { ...pubblica, key_ops: [] }, ECDH, true, []);
-  return esportaPubblica(chiave);
+export async function pubblicaDaPrivata(privata: string): Promise<string> {
+  return base64url(p256.getPublicKey(daBase64url(privata), false));
 }
 
 /**
  * Le stesse due chiavi su entrambi i lati: il desktop chiama con la sua
  * privata e la pubblica del telefono, il telefono con la sua e quella del
  * desktop. sale = identificativi di computer e telefono.
+ * Lancia un errore se la pubblica non è un punto valido della curva.
  */
-export async function derivaChiavi(privata: CryptoKey, pubblicaAltro: string, sale: string): Promise<ChiaviSessione> {
-  const altro = await subtle().importKey('raw', daBase64url(pubblicaAltro), ECDH, false, []);
-  const segreto = await subtle().deriveBits({ name: 'ECDH', public: altro }, privata, 256);
-  const base = await subtle().importKey('raw', segreto, 'HKDF', false, ['deriveKey']);
-  const deriva = (info: string) =>
-    subtle().deriveKey(
-      { name: 'HKDF', hash: 'SHA-256', salt: new TextEncoder().encode(sale), info: new TextEncoder().encode(info) },
-      base,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt'],
-    );
-  return { versoDesktop: await deriva(VERSO_DESKTOP), versoTelefono: await deriva(VERSO_TELEFONO) };
+export async function derivaChiavi(privata: string, pubblicaAltro: string, sale: string): Promise<ChiaviSessione> {
+  const punto = p256.getSharedSecret(daBase64url(privata), daBase64url(pubblicaAltro), true);
+  const segreto = punto.slice(1, 33);
+  const s = utf8(sale);
+  return {
+    versoDesktop: hkdf(sha256, segreto, s, utf8(VERSO_DESKTOP), 32),
+    versoTelefono: hkdf(sha256, segreto, s, utf8(VERSO_TELEFONO), 32),
+  };
 }
 
-export async function cifra(chiave: CryptoKey, testo: string): Promise<string> {
-  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-  const cifrato = new Uint8Array(await subtle().encrypt({ name: 'AES-GCM', iv }, chiave, new TextEncoder().encode(testo)));
+export async function cifra(chiave: Uint8Array, testo: string): Promise<string> {
+  const iv = byteCasuali(12);
+  const cifrato = gcm(chiave, iv).encrypt(utf8(testo));
   const tutto = new Uint8Array(iv.length + cifrato.length);
   tutto.set(iv);
   tutto.set(cifrato, iv.length);
@@ -83,18 +69,22 @@ export async function cifra(chiave: CryptoKey, testo: string): Promise<string> {
 }
 
 /** Lancia un errore se il messaggio è stato alterato o la chiave è sbagliata. */
-export async function decifra(chiave: CryptoKey, dati: string): Promise<string> {
+export async function decifra(chiave: Uint8Array, dati: string): Promise<string> {
   const tutto = daBase64url(dati);
-  const chiaro = await subtle().decrypt({ name: 'AES-GCM', iv: tutto.slice(0, 12) }, chiave, tutto.slice(12));
-  return new TextDecoder().decode(chiaro);
+  if (tutto.length < 12 + 16) throw new Error('Messaggio troppo corto.');
+  return daUtf8(gcm(chiave, tutto.slice(0, 12)).decrypt(tutto.slice(12)));
 }
 
 export function casuale(byte = 32): string {
-  return base64url(globalThis.crypto.getRandomValues(new Uint8Array(byte)));
+  return base64url(byteCasuali(byte));
 }
 
 export async function impronta(testo: string): Promise<string> {
-  return base64url(new Uint8Array(await subtle().digest('SHA-256', new TextEncoder().encode(testo))));
+  return base64url(sha256(utf8(testo)));
+}
+
+function byteCasuali(n: number): Uint8Array {
+  return globalThis.crypto.getRandomValues(new Uint8Array(n));
 }
 
 function base64url(b: Uint8Array): string {
@@ -103,9 +93,39 @@ function base64url(b: Uint8Array): string {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function daBase64url(s: string): Uint8Array<ArrayBuffer> {
+function daBase64url(s: string): Uint8Array {
   const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
   const out = new Uint8Array(b.length);
   for (let i = 0; i < b.length; i++) out[i] = b.charCodeAt(i);
   return out;
+}
+
+// UTF-8 a mano: TextEncoder/TextDecoder non sono garantiti su ogni Hermes.
+function utf8(s: string): Uint8Array {
+  const out: number[] = [];
+  for (const ch of s) {
+    let c = ch.codePointAt(0)!;
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else {
+      c = Math.min(c, 0x10ffff);
+      out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+  }
+  return Uint8Array.from(out);
+}
+
+function daUtf8(b: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < b.length; ) {
+    const x = b[i++];
+    let c: number;
+    if (x < 0x80) c = x;
+    else if (x < 0xe0) c = ((x & 31) << 6) | (b[i++] & 63);
+    else if (x < 0xf0) c = ((x & 15) << 12) | ((b[i++] & 63) << 6) | (b[i++] & 63);
+    else c = ((x & 7) << 18) | ((b[i++] & 63) << 12) | ((b[i++] & 63) << 6) | (b[i++] & 63);
+    s += String.fromCodePoint(c);
+  }
+  return s;
 }

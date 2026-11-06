@@ -7,7 +7,7 @@ import type { Database } from '../core/db';
 import { elencaDispositivi } from '../core/dispositivi';
 import type { Host } from '../core/host';
 import { PonteRelay, type IdentitaDesktop, type StatoPonte } from '../core/ponteRelay';
-import { casuale, esportaPrivata, generaCoppia, importaPrivata, pubblicaDaPrivata } from '../shared/cifratura';
+import { casuale, generaCoppia, pubblicaDaPrivata } from '../shared/cifratura';
 import { registraErroreGrezzo } from './logger';
 import { cifraturaDisponibile, leggiCifrato, scriviCifrato } from './segreti';
 
@@ -25,7 +25,7 @@ const IDENTITA_PATH = () => join(app.getPath('userData'), 'telefono-identita.bin
 interface IdentitaSalvata {
   hostId: string;
   segreto: string;
-  privata: JsonWebKey;
+  privata: string;
 }
 
 export interface StatoTelefono {
@@ -38,11 +38,11 @@ async function identita(): Promise<IdentitaDesktop> {
   const salvata = await leggiCifrato(IDENTITA_PATH());
   if (salvata) {
     const i = JSON.parse(salvata) as IdentitaSalvata;
-    return { hostId: i.hostId, segreto: i.segreto, privata: await importaPrivata(i.privata), pubblica: await pubblicaDaPrivata(i.privata) };
+    return { hostId: i.hostId, segreto: i.segreto, privata: i.privata, pubblica: await pubblicaDaPrivata(i.privata) };
   }
   // Prima volta: identità nuova di questo computer.
   const coppia = await generaCoppia();
-  const nuova: IdentitaSalvata = { hostId: casuale(18), segreto: casuale(32), privata: await esportaPrivata(coppia.privata) };
+  const nuova: IdentitaSalvata = { hostId: casuale(18), segreto: casuale(32), privata: coppia.privata };
   await scriviCifrato(IDENTITA_PATH(), JSON.stringify(nuova));
   return { hostId: nuova.hostId, segreto: nuova.segreto, privata: coppia.privata, pubblica: coppia.pubblica };
 }
