@@ -134,7 +134,7 @@ con schema zod in `src/shared/protocollo/eventi.ts`.
 | `articolo` / `idee` | sì | come oggi | Studio digitale |
 | `conferma_richiesta` | sì | confermaId, livello, titolo, anteprima | Prepara §7; nel passo 1 solo tipo e reducer |
 | `conferma_risposta` | sì | confermaId, esito, nota | |
-| `turno_finito` | sì | turnoId, esito (`ok`/`errore`/`interrotto`), costoUsd?, messaggioErrore? | Sostituisce `completato`/`errore` |
+| `turno_finito` | sì | turnoId, esito (`ok`/`errore`/`interrotto`), costoUsd?, messaggioErrore?, testoParziale? | Sostituisce `completato`/`errore`. `testoParziale` serve perché i delta non sono nel log; `messaggioErrore` è solo il motivo, il reducer compone "parziale + ⚠ motivo" |
 | `conversazione_eliminata` | sì | | Cancellazione logica, rimozione fisica dopo |
 | `entita_cambiata` | sì | entita, id, azione | pratica, documento, idea, preferenze… |
 
@@ -270,7 +270,7 @@ I dati d'esempio (`datiIniziali.ts`) vengono creati dall'host al primo avvio
 1. **Electron ≥ 37**. Si verifica che dev, `dist:mac` e `dist:win` (dal Mac)
    funzionino ancora, compresi claude.exe e canvas.
    *Fatto quando:* l'installer Win parte su una VM, la chat risponde e l'OCR funziona.
-2. **Protocollo + reducer** in `src/shared/`, con test unitari (vitest).
+2. **Protocollo + reducer** in `src/shared/`, con test unitari (vitest). ✅ `src/shared/protocollo/`, `src/shared/reducer.ts`, `npm test`.
    *Fatto quando:* applicando gli eventi di una conversazione reale si
    ottengono gli stessi `Messaggio[]` che produce oggi `ConversazioneView`.
 3. **EventStore + migrazioni DB + migrazione JSON**.
