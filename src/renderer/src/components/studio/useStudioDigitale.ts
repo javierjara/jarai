@@ -104,7 +104,10 @@ export function useStudioDigitale({ attivo, setConversazioni, setIdee, setPrefer
       const parziale = parziali.current[id] ?? '';
       delete parziali.current[id];
       setLavoro(id, { elaborando: false, attivita: null, parziale: '' });
-      const testo = evento.tipo === 'completato' ? evento.testo : parziale ? `${parziale}\n\n${evento.messaggio}` : evento.messaggio;
+      // Il main manda solo il motivo dell'errore: il testo già arrivato si
+      // ricompone qui, tranne quando era l'errore grezzo del CLI.
+      const conParziale = evento.tipo === 'errore' && parziale && !evento.scartaParziale;
+      const testo = evento.tipo === 'completato' ? evento.testo : conParziale ? `${parziale}\n\n⚠ ${evento.messaggio}` : evento.messaggio;
       const messaggio: Messaggio = { id: nuovoId(), ruolo: 'assistente', testo, ...(articolo ? { articolo } : {}) };
       aggiorna(id, (c) => ({
         ...c,

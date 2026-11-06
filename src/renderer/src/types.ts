@@ -215,7 +215,8 @@ export interface Studio {
 export interface StatoPersistito {
   pratiche: Pratica[];
   documenti: Record<string, Documento[]>;
-  conversazioni: Conversazione[];
+  /** Solo nei file salvati prima di jarai.db: ora le conversazioni stanno nell'host. */
+  conversazioni?: Conversazione[];
   studio?: Studio;
   studioDigitale?: ConversazioneSito[];
   ideeSito?: Idea[];

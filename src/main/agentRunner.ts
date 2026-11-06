@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk';
-import type { WebContents } from 'electron';
 import { haChiave, salvaStatoCollegamento } from './claudeAuth';
 import { ambienteClaude, leggiLicenza, statoLicenza } from './licenza';
 import { percorsoClaudeIntegrato } from './claudeLogin';
@@ -57,8 +56,10 @@ type Qualita = 'Standard' | 'Massima';
 // il sito dello studio, con strumenti propri e nessun accesso alle pratiche.
 type Modalita = 'pratica' | 'studio-digitale';
 
-interface InvioPayload {
+export interface InvioPayload {
   conversazioneId: string;
+  /** Sessione dell'SDK salvata dall'host (jarai.db): vale anche dopo un riavvio. */
+  resume?: string;
   modalita?: Modalita;
   testo: string;
   qualita: Qualita;
@@ -87,6 +88,8 @@ interface EventoErrore {
   tipo: 'errore';
   conversazioneId: string;
   messaggio: string;
+  /** Il testo arrivato in streaming era il messaggio grezzo del CLI: non va mostrato. */
+  scartaParziale?: boolean;
 }
 interface EventoBozzaPronta {
   tipo: 'bozza';
@@ -109,7 +112,14 @@ interface EventoIdee {
   conversazioneId: string;
   idee: IdeaProposta[];
 }
-type EventoAgente =
+// Id della sessione dell'SDK, da salvare per riprendere la conversazione.
+interface EventoSessione {
+  tipo: 'sessione';
+  conversazioneId: string;
+  sessionId: string;
+}
+export type EventoAgente =
+  | EventoSessione
   | EventoDelta
   | EventoAttivita
   | EventoCompletato
@@ -262,10 +272,6 @@ async function opzioniBase(
   };
 }
 
-function conParzialeEventuale(parziale: string, messaggioErrore: string): string {
-  return parziale ? `${parziale}\n\n⚠ ${messaggioErrore}` : messaggioErrore;
-}
-
 function messaggioErroreItaliano(err: unknown): string {
   const testo = err instanceof Error ? err.message : String(err);
   // Errori del proxy JarAI (licenza, limite del mese, modello non incluso):
@@ -298,18 +304,21 @@ function messaggioErroreItaliano(err: unknown): string {
   return 'Non riesco a raggiungere Claude. Controlla la connessione e riprova.';
 }
 
-export async function inviaMessaggio(payload: InvioPayload, webContents: WebContents): Promise<void> {
+// Gli eventi escono da emetti: verso l'host (conversazioni delle pratiche,
+// src/main/host.ts) o direttamente verso la finestra (Studio digitale, fino
+// al passo 5). Gli errori portano solo il motivo, in italiano: il testo
+// arrivato prima lo ricompone chi riceve (oggi lo si incollava qui ed
+// esso compariva due volte).
+export async function inviaMessaggio(payload: InvioPayload, emetti: (evento: EventoAgente) => void): Promise<void> {
   const { conversazioneId, testo, qualita, praticaId, documenti } = payload;
   const studioDigitale = payload.modalita === 'studio-digitale';
-  const invia = (evento: EventoAgente) => {
-    if (!webContents.isDestroyed()) webContents.send('claude:evento', evento);
-  };
+  const invia = emetti;
+  if (payload.resume) sessioniPerConversazione.set(conversazioneId, payload.resume);
 
   // Pratiche importate prima dell'indice, o file cambiati nel frattempo:
   // l'indicizzazione parte comunque, così le letture successive sono pronte.
   if (!studioDigitale) indicizzaInBackground(documenti ?? []);
 
-  let testoCompleto = '';
   try {
     if (studioDigitale && !(await funzioneAttiva(FUNZIONE_STUDIO_DIGITALE))) {
       invia({ tipo: 'errore', conversazioneId, messaggio: 'Lo Studio digitale non è attivo per questa licenza JarAI.' });
@@ -336,35 +345,38 @@ export async function inviaMessaggio(payload: InvioPayload, webContents: WebCont
         if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
           invia({ tipo: 'attivita', conversazioneId, testo: attivitaPerStrumento(event.content_block.name) });
         } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-          testoCompleto += event.delta.text;
           invia({ tipo: 'delta', conversazioneId, testo: event.delta.text });
         }
       } else if (message.type === 'result') {
         sessioniPerConversazione.set(conversazioneId, message.session_id);
+        invia({ tipo: 'sessione', conversazioneId, sessionId: message.session_id });
         if (message.subtype === 'success' && !message.is_error) {
           invia({ tipo: 'completato', conversazioneId, testo: message.result, costoUsd: message.total_cost_usd });
           void registraUso(modelloPer(qualita), message.total_cost_usd);
         } else {
           // Con subtype "success" ma is_error true, il testo dell'errore sta
           // in message.result (es. "Not logged in · Please run /login") — è
-          // lo stesso testo grezzo già arrivato via streaming in
-          // testoCompleto, quindi qui si mostra solo la traduzione italiana,
+          // lo stesso testo grezzo già arrivato in streaming: va scartato
+          // (scartaParziale) e si mostra solo la traduzione italiana,
           // mai il messaggio del CLI (spec §0: zero codice a schermo).
-          // Negli altri subtype non c'è altro che il nome del subtype stesso,
-          // e testoCompleto può invece contenere una risposta parziale
-          // genuina da preservare (es. connessione caduta a metà).
+          // Negli altri subtype non c'è altro che il nome del subtype stesso.
+          // L'eventuale risposta parziale genuina (es. connessione caduta a
+          // metà) la conserva chi riceve, dai delta già arrivati.
           const erroreGrezzo = message.subtype === 'success' ? message.result : message.subtype;
           void registraErroreGrezzo('risultato-non-riuscito', erroreGrezzo);
-          const messaggioAmico = messaggioErroreItaliano(new Error(erroreGrezzo));
-          const messaggioFinale = message.subtype === 'success' ? messaggioAmico : conParzialeEventuale(testoCompleto, messaggioAmico);
-          invia({ tipo: 'errore', conversazioneId, messaggio: messaggioFinale });
+          invia({
+            tipo: 'errore',
+            conversazioneId,
+            messaggio: messaggioErroreItaliano(new Error(erroreGrezzo)),
+            ...(message.subtype === 'success' ? { scartaParziale: true } : {}),
+          });
         }
       }
     }
   } catch (err) {
     const dettaglio = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
     void registraErroreGrezzo('eccezione-invio', dettaglio);
-    invia({ tipo: 'errore', conversazioneId, messaggio: conParzialeEventuale(testoCompleto, messaggioErroreItaliano(err)) });
+    invia({ tipo: 'errore', conversazioneId, messaggio: messaggioErroreItaliano(err) });
   } finally {
     abortControllers.delete(conversazioneId);
   }

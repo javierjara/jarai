@@ -3,7 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { ricostruisciConversazione } from '../../shared/reducer';
 import { apriDatabase } from '../db';
 import { EventStore } from '../eventStore';
-import { migraDaJson, type DatiLegacy } from '../migrazioneJson';
+import {
+  MIGRAZIONE_CONVERSAZIONI,
+  MIGRAZIONE_RESTO,
+  migraConversazioniPratica,
+  migraDaJson,
+  migraResto,
+  migrazioneFatta,
+  type DatiLegacy,
+} from '../migrazioneJson';
 
 const ARTICOLO = {
   titolo: 'Mantenimento dei figli maggiorenni',
@@ -151,8 +159,9 @@ describe('migraDaJson', () => {
     expect(editoriale).toMatchObject({ modificato: true, sito: { id: 42 }, articolo: { titolo: 'Versione modificata' } });
     expect(editoriale.messaggi).toBeUndefined();
 
-    const impostazioni = db.prepare('SELECT chiave FROM impostazione ORDER BY chiave').all() as Array<{ chiave: string }>;
+    const impostazioni = db.prepare("SELECT chiave FROM impostazione WHERE chiave NOT LIKE 'migrazione.%' ORDER BY chiave").all() as Array<{ chiave: string }>;
     expect(impostazioni.map((i) => i.chiave)).toEqual(['preferenzeSito', 'studio']);
+    expect(migrazioneFatta(db, MIGRAZIONE_CONVERSAZIONI) && migrazioneFatta(db, MIGRAZIONE_RESTO)).toBe(true);
   });
 
   it('il seq segue l’ordine cronologico delle conversazioni', () => {
@@ -161,13 +170,14 @@ describe('migraDaJson', () => {
     const ordine = db
       .prepare("SELECT conversazione_id FROM evento WHERE tipo = 'conversazione_creata' ORDER BY seq")
       .all() as Array<{ conversazione_id: string }>;
+    // Prima le conversazioni delle pratiche (parte 1), poi lo Studio digitale (parte 2).
     expect(ordine.map((o) => o.conversazione_id)).toEqual(['c-streaming', 'c-completa', 'c-interrotta', 'c-solo-domanda', 's1']);
   });
 
   it('non si ripete su un database già pieno', () => {
     const db = apriDatabase(':memory:');
     migraDaJson(db, DATI, { orologio });
-    expect(() => migraDaJson(db, DATI, { orologio })).toThrow(/già dati/);
+    expect(() => migraDaJson(db, DATI, { orologio })).toThrow(/già fatta/);
   });
 
   it('se una conversazione non torna, annulla tutto senza lasciare dati a metà', () => {
@@ -195,6 +205,18 @@ describe('migraDaJson', () => {
     expect(() => migraDaJson(db, conCampoIgnoto, { orologio })).toThrow(/c-strana non corrisponde.*bozza del messaggio 2/);
     const conteggi = db.prepare('SELECT (SELECT COUNT(*) FROM evento) e, (SELECT COUNT(*) FROM pratica) p').get();
     expect(conteggi).toEqual({ e: 0, p: 0 });
+    // Niente segno "fatto": al prossimo avvio si riprova.
+    expect(migrazioneFatta(db, MIGRAZIONE_CONVERSAZIONI)).toBe(false);
+  });
+
+  it('le due parti si possono fare in momenti diversi', () => {
+    const db = apriDatabase(':memory:');
+    expect(migraConversazioniPratica(db, DATI.conversazioni, { orologio }).conversazioni).toBe(4);
+    expect(migrazioneFatta(db, MIGRAZIONE_CONVERSAZIONI)).toBe(true);
+    expect(migrazioneFatta(db, MIGRAZIONE_RESTO)).toBe(false);
+    expect(() => migraConversazioniPratica(db, DATI.conversazioni, { orologio })).toThrow(/già fatta/);
+    expect(migraResto(db, DATI, { orologio })).toMatchObject({ pratiche: 1, conversazioniSito: 1 });
+    expect(migrazioneFatta(db, MIGRAZIONE_RESTO)).toBe(true);
   });
 });
 

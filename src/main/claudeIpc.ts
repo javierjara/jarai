@@ -74,7 +74,11 @@ export function registraCollegamentoClaude(getWindow: () => BrowserWindow | null
     const payload = invioSchema.parse(payloadInput);
     const win = getWindow();
     if (!win) return;
-    void inviaMessaggio(payload, win.webContents);
+    // Solo lo Studio digitale passa ancora di qui (fino al passo 5): le
+    // conversazioni delle pratiche vanno all'host (hostDesktop.ts).
+    void inviaMessaggio(payload, (evento) => {
+      if (!win.webContents.isDestroyed()) win.webContents.send('claude:evento', evento);
+    });
   });
 
   ipcMain.handle('claude:ferma', (_event, conversazioneIdInput: unknown) => {

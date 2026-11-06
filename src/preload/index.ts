@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
+// Solo tipi: niente codice di src/shared nel preload (resta minimo).
+import type { Busta, Evento } from '../shared/protocollo';
 
 // Duplicate (non importate) dai tipi renderer con lo stesso nome: preload e
 // renderer sono due programmi TypeScript separati (tsconfig.node.json vs
@@ -56,7 +58,8 @@ type EventoAgente =
   | { tipo: 'delta'; conversazioneId: string; testo: string }
   | { tipo: 'attivita'; conversazioneId: string; testo: string }
   | { tipo: 'completato'; conversazioneId: string; testo: string; costoUsd: number }
-  | { tipo: 'errore'; conversazioneId: string; messaggio: string }
+  | { tipo: 'errore'; conversazioneId: string; messaggio: string; scartaParziale?: boolean }
+  | { tipo: 'sessione'; conversazioneId: string; sessionId: string }
   | { tipo: 'bozza'; conversazioneId: string; titolo: string; contenuto: string }
   | { tipo: 'lavori'; conversazioneId: string; lavori: LavoroDocumento[] }
   | { tipo: 'articolo'; conversazioneId: string; articolo: ArticoloProposto }
@@ -294,6 +297,18 @@ const jarai = {
     },
 
     uso: (): Promise<RiepilogoUso> => ipcRenderer.invoke('claude:uso'),
+  },
+
+  // Host (docs/eventstore-protocollo.md): comandi e richieste in una busta,
+  // eventi in arrivo su jarai:evento. Le conversazioni delle pratiche
+  // passano tutte di qui.
+  host: {
+    busta: (busta: Busta): Promise<Busta> => ipcRenderer.invoke('jarai:busta', busta),
+    onEvento: (callback: (evento: Evento) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, evento: Evento) => callback(evento);
+      ipcRenderer.on('jarai:evento', listener);
+      return () => ipcRenderer.removeListener('jarai:evento', listener);
+    },
   },
 
   dati: {

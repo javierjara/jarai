@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import ConversazioneView from './components/ConversazioneView';
 import StoricoView from './components/StoricoView';
@@ -6,13 +6,25 @@ import PraticheView from './components/PraticheView';
 import Settings from './components/Settings';
 import StudioDigitaleView from './components/StudioDigitaleView';
 import { PREFERENZE_SITO_DEFAULT, useStudioDigitale } from './components/studio/useStudioDigitale';
-import { AVVOCATO_NOME, CONVERSAZIONI, DOCUMENTI, PRATICHE, STUDIO_NOME } from './data/datiIniziali';
-import { AMBITI } from './types';
+import { AVVOCATO_NOME, DOCUMENTI, PRATICHE, STUDIO_NOME } from './data/datiIniziali';
+import { comando, useElenco } from './host';
+import { AMBITI, PROCEDURE } from './types';
+import type { RiepilogoConversazione } from '../../shared/reducer';
 import type { Conversazione, ConversazioneSito, Documento, FileImportato, Idea, MainView, Pratica, PreferenzeSito, StatoPersistito, Studio } from './types';
 
 export default function App() {
   const [pratiche, setPratiche] = useState<Pratica[]>(PRATICHE);
-  const [conversazioni, setConversazioni] = useState<Conversazione[]>(CONVERSAZIONI);
+  // Le conversazioni delle pratiche le possiede l'host (jarai.db): qui solo
+  // l'elenco, aggiornato dagli eventi.
+  const elenco = useElenco();
+  const conversazioni = useMemo(
+    () =>
+      Object.values(elenco.conversazioni)
+        .filter((r) => r.modalita === 'pratica')
+        .map(daRiepilogo)
+        .sort((a, b) => b.aggiornataIl.localeCompare(a.aggiornataIl)),
+    [elenco],
+  );
   const [documenti, setDocumenti] = useState<Record<string, Documento[]>>(DOCUMENTI);
   const [studio, setStudio] = useState<Studio>({ nome: STUDIO_NOME, avvocato: AVVOCATO_NOME });
   const [currentView, setCurrentView] = useState<MainView>('home');
@@ -74,7 +86,6 @@ export default function App() {
       const stato = salvato as StatoPersistito | null;
       if (stato) {
         setPratiche(stato.pratiche);
-        setConversazioni(stato.conversazioni);
         setDocumenti(stato.documenti);
         if (stato.studio) setStudio(stato.studio);
         if (stato.studioDigitale) setStudioDigitale(stato.studioDigitale);
@@ -97,25 +108,27 @@ export default function App() {
   // Salva su disco a ogni cambiamento, con un piccolo debounce per non
   // scrivere il file a ogni singolo tasto premuto (es. mentre si scrivono le
   // istruzioni di una pratica).
+  // Le conversazioni delle pratiche non passano più di qui: stanno in jarai.db.
   const salvaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const daSalvare = { pratiche, documenti, studio, studioDigitale, ideeSito, preferenzeSito };
+  const daSalvareRef = useRef(daSalvare);
+  daSalvareRef.current = daSalvare;
   useEffect(() => {
     if (!pronto) return;
     if (salvaTimer.current) clearTimeout(salvaTimer.current);
-    salvaTimer.current = setTimeout(() => {
-      void window.jarai.dati.salva({
-        pratiche,
-        documenti,
-        conversazioni,
-        studio,
-        studioDigitale,
-        ideeSito,
-        preferenzeSito,
-      });
-    }, 500);
+    salvaTimer.current = setTimeout(() => void window.jarai.dati.salva(daSalvareRef.current), 500);
     return () => {
       if (salvaTimer.current) clearTimeout(salvaTimer.current);
     };
-  }, [pronto, pratiche, documenti, conversazioni, studio, studioDigitale, ideeSito, preferenzeSito]);
+  }, [pronto, pratiche, documenti, studio, studioDigitale, ideeSito, preferenzeSito]);
+
+  // Prima di mandare una domanda: l'host legge pratica e documenti dal file
+  // (fino al passo 5), che deve essere già aggiornato.
+  const salvaOra = useCallback(async () => {
+    if (!pronto) return;
+    if (salvaTimer.current) clearTimeout(salvaTimer.current);
+    await window.jarai.dati.salva(daSalvareRef.current);
+  }, [pronto]);
 
   const activeConversazione = conversazioni.find((c) => c.id === activeConversazioneId) ?? null;
 
@@ -141,23 +154,11 @@ export default function App() {
   }
 
   function eliminaConversazione(id: string) {
-    setConversazioni((prev) => prev.filter((c) => c.id !== id));
+    void comando({ tipo: 'conversazione.elimina', argomenti: { conversazioneId: id } });
     if (activeConversazioneId === id) {
       setActiveConversazioneId(null);
       setHomeKey((k) => k + 1);
     }
-  }
-
-  function salvaConversazione(c: Conversazione) {
-    setConversazioni((prev) => {
-      const idx = prev.findIndex((x) => x.id === c.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = c;
-        return next;
-      }
-      return [c, ...prev];
-    });
   }
 
   // Fase 3 (spec §5.3): la pratica nasce già legata 1:1 alla cartella scelta
@@ -212,7 +213,9 @@ export default function App() {
   function eliminaPratica(id: string) {
     void window.jarai.eliminaMemoria(id);
     setPratiche((prev) => prev.filter((p) => p.id !== id));
-    setConversazioni((prev) => prev.filter((c) => c.praticaId !== id));
+    for (const c of conversazioni) {
+      if (c.praticaId === id) void comando({ tipo: 'conversazione.elimina', argomenti: { conversazioneId: c.id } });
+    }
     setDocumenti((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -260,9 +263,9 @@ export default function App() {
             key={activeConversazione?.id ?? `nuova-${homeKey}`}
             pratiche={pratiche}
             praticaId={activeConversazione?.praticaId ?? pendingPraticaId}
-            conversazione={activeConversazione}
+            conversazioneId={activeConversazione?.id ?? null}
             documenti={documenti}
-            onSalva={salvaConversazione}
+            onPrimaDiInviare={salvaOra}
           />
         );
       case 'storico':
@@ -330,4 +333,20 @@ export default function App() {
       <main className="main-area">{renderView()}</main>
     </div>
   );
+}
+
+// Le viste (sidebar, storico, pratiche) usano ancora il tipo Conversazione:
+// l'elenco ne dà solo i campi che servono, i messaggi restano nell'host.
+function daRiepilogo(r: RiepilogoConversazione): Conversazione {
+  return {
+    id: r.id,
+    praticaId: r.praticaId ?? 'senza-pratica',
+    titolo: r.titolo || 'Nuova conversazione',
+    procedura: r.procedura ?? PROCEDURE[0],
+    stato: r.stato,
+    aggiornataIl: r.aggiornataIl,
+    dispositivoOrigine: r.creataDa && r.creataDa !== 'desktop' ? 'telefono' : 'desktop',
+    ...(r.attivita ? { attivitaCorrente: r.attivita } : {}),
+    messaggi: [],
+  };
 }

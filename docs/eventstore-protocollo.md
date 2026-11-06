@@ -276,7 +276,7 @@ I dati d'esempio (`datiIniziali.ts`) vengono creati dall'host al primo avvio
 3. **EventStore + migrazioni DB + migrazione JSON**. ✅ `src/core/{db,migrazioni,eventStore,migrazioneJson}.ts`. La rinomina di `jarai-dati.json` e l'avvio della migrazione all'apertura dell'app arrivano con il passo 4, insieme all'host.
    *Fatto quando:* un `jarai-dati.json` reale viene migrato e riletto senza
    perdite (test con fixture).
-4. **Host + trasporto IPC + agentRunner sull'host**. Le conversazioni (pratica
+4. **Host + trasporto IPC + agentRunner sull'host**. ✅ Solo le conversazioni delle pratiche: lo Studio digitale passa all'host con il passo 5, insieme alle entità. `src/core/host.ts`, `src/main/hostDesktop.ts`, `src/renderer/src/host.ts`. Provato end-to-end con Claude vero: cambio vista a metà risposta e resume dopo riavvio. Le conversazioni (pratica
    e Studio digitale) passano dai comandi.
    *Fatto quando:* cambiando vista a metà risposta e tornando indietro la
    risposta è completa; chiudendo e riaprendo l'app la conversazione

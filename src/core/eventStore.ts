@@ -99,6 +99,10 @@ export class EventStore {
     });
   }
 
+  comandoEseguito(comandoId: string): boolean {
+    return this.leggiComando.get(comandoId) !== undefined;
+  }
+
   /** Eventi dopo un cursore, per la riconnessione di un client. */
   dopo(seq: number, limite = 1000): Evento[] {
     return (this.leggiDopo.all(seq, limite) as unknown as RigaEvento[]).map(daRiga);

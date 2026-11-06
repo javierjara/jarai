@@ -7,7 +7,7 @@ import { z } from 'zod';
 // unico file JSON nella cartella dati dell'app. Stessa forma dei dati del
 // renderer, così il passaggio a `jarai.db` più avanti non tocca la UI —
 // cambia solo dove FolderService/EventStore leggono e scrivono.
-const DATI_PATH = () => join(app.getPath('userData'), 'jarai-dati.json');
+export const DATI_PATH = () => join(app.getPath('userData'), 'jarai-dati.json');
 
 const ambitoSchema = z.enum(['Civile', 'Famiglia', 'Bancario', 'Lavoro', 'Societario', 'Successioni']);
 const proceduraSchema = z.enum(['Analisi & Redazione', 'Cronologia dei fatti', 'Revisione contratto', 'Analisi estratti conto e spese']);
@@ -153,7 +153,9 @@ const conversazioneSitoSchema = z.object({
 const statoSchema = z.object({
   pratiche: z.array(praticaSchema),
   documenti: z.record(z.string(), z.array(documentoSchema)),
-  conversazioni: z.array(conversazioneSchema),
+  // Facoltativo dal passo 4 (EventStore): le conversazioni delle pratiche
+  // stanno in jarai.db e il renderer non le manda più.
+  conversazioni: z.array(conversazioneSchema).optional(),
   // Facoltativo: i dati salvati prima di questo campo (jarai-dati.json già
   // esistenti) restano validi, l'app riparte dal nome studio di default.
   studio: studioSchema.optional(),
@@ -179,11 +181,22 @@ async function salvaDati(stato: StatoPersistito): Promise<void> {
   await fs.writeFile(DATI_PATH(), JSON.stringify(stato, null, 2), 'utf-8');
 }
 
-export function registraPersistenza(): void {
+/**
+ * conversazioniNelDatabase: true quando le conversazioni delle pratiche sono
+ * già migrate in jarai.db (src/main/hostDesktop.ts). Finché non lo sono (per
+ * esempio se la migrazione è fallita), quelle del file non si toccano: il
+ * renderer non le manda più, e senza questo controllo andrebbero perse.
+ */
+export function registraPersistenza(conversazioniNelDatabase: () => boolean): void {
   ipcMain.handle('dati:carica', async () => caricaDati());
 
   ipcMain.handle('dati:salva', async (_event, statoInput: unknown) => {
-    const stato = statoSchema.parse(statoInput);
-    await salvaDati(stato);
+    const { conversazioni: _ignorate, ...stato } = statoSchema.parse(statoInput);
+    if (conversazioniNelDatabase()) {
+      await salvaDati(stato);
+    } else {
+      const sulDisco = await caricaDati();
+      await salvaDati({ ...stato, ...(sulDisco?.conversazioni ? { conversazioni: sulDisco.conversazioni } : {}) });
+    }
   });
 }

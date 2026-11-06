@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Bozza, Conversazione, Documento, LavoroDocumento, Messaggio, Pratica, Procedura } from '../types';
+import { messaggiVisibili } from '../../../shared/reducer';
+import { comando, useConversazione } from '../host';
+import type { Bozza, Documento, LavoroDocumento, Messaggio, Pratica, Procedura } from '../types';
 import { PROCEDURE } from '../types';
 import PlanPanel from './PlanPanel';
 import Markdown from './Markdown';
@@ -9,9 +11,11 @@ import { FolderIcon, SendIcon, StopIcon } from './icons';
 interface Props {
   pratiche: Pratica[];
   praticaId: string | null;
-  conversazione: Conversazione | null;
+  /** null: conversazione nuova, nasce al primo invio. */
+  conversazioneId: string | null;
   documenti: Record<string, Documento[]>;
-  onSalva: (c: Conversazione) => void;
+  /** Salva subito pratiche e documenti: l'host li legge al momento dell'invio. */
+  onPrimaDiInviare: () => Promise<void>;
 }
 
 // crypto.randomUUID(), non un contatore: un contatore in memoria riparte da
@@ -19,25 +23,33 @@ interface Props {
 // conversazioni create in sessioni diverse potevano finire con lo stesso id.
 const nextId = () => crypto.randomUUID();
 
-export default function ConversazioneView({ pratiche, praticaId, conversazione, documenti, onSalva }: Props) {
+// La conversazione la possiede l'host (src/core/host.ts): qui si mandano
+// comandi e si disegna la proiezione che arriva dagli eventi. Cambiare vista
+// durante una risposta non perde più niente: tornando, lo snapshot contiene
+// anche il testo già scritto.
+export default function ConversazioneView({ pratiche, praticaId, conversazioneId, documenti, onPrimaDiInviare }: Props) {
+  const idRef = useRef(conversazioneId ?? nextId());
+  const conversazione = useConversazione(idRef.current);
   const pratica = pratiche.find((p) => p.id === (conversazione?.praticaId ?? praticaId)) ?? null;
   const documentiPratica = pratica ? (documenti[pratica.id] ?? []) : [];
 
-  const conversazioneIdRef = useRef(conversazione?.id ?? nextId());
-  const [messaggi, setMessaggi] = useState<Messaggio[]>(conversazione?.messaggi ?? []);
+  const turno = conversazione?.turno ?? null;
+  const messaggi: Messaggio[] = conversazione ? messaggiVisibili(conversazione) : [];
   const piano = conversazione?.piano;
-  const [procedura, setProcedura] = useState<Procedura>(conversazione?.procedura ?? PROCEDURE[0]);
+  const lavori: LavoroDocumento[] = turno?.lavori ?? [];
+  const [proceduraScelta, setProcedura] = useState<Procedura | null>(null);
+  const procedura = proceduraScelta ?? conversazione?.procedura ?? PROCEDURE[0];
   const [input, setInput] = useState('');
-  const [elaborando, setElaborando] = useState(false);
-  const [attivita, setAttivita] = useState<string | null>(conversazione?.attivitaCorrente ?? null);
-  const [lavori, setLavori] = useState<LavoroDocumento[]>([]);
+  const [inviando, setInviando] = useState(false);
+  const [erroreInvio, setErroreInvio] = useState<string | null>(null);
+  const elaborando = inviando || turno !== null;
+  // Come prima: "Sto pensando…" finché non arriva un'attività o del testo.
+  const attivita = turno ? (turno.attivita ?? (turno.testoParziale ? null : 'Sto pensando…')) : inviando ? 'Sto pensando…' : null;
   const [qualita, setQualita] = useState<'Standard' | 'Massima'>('Standard');
-  const [confermaVisibile, setConfermaVisibile] = useState(conversazione?.stato === 'attesa');
+  const [confermaChiusa, setConfermaChiusa] = useState(false);
+  const confermaVisibile = conversazione?.stato === 'attesa' && !confermaChiusa;
   const threadRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  // La bozza arriva via un tool_use durante il turno, prima del testo finale:
-  // resta qui finché il messaggio non si chiude, poi si aggancia a quello.
-  const bozzaInCorsoRef = useRef<Bozza | null>(null);
   const [bozzaAperta, setBozzaAperta] = useState<Bozza | null>(null);
 
   // Il composer si allarga con il testo, come su T3 Code, fino al limite in
@@ -49,112 +61,40 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
 
-  useEffect(() => {
-    const id = conversazioneIdRef.current;
-    return window.jarai.claude.onEvento((evento) => {
-      if (evento.conversazioneId !== id) return;
-
-      if (evento.tipo === 'attivita') {
-        setAttivita(evento.testo);
-        return;
-      }
-
-      if (evento.tipo === 'lavori') {
-        setLavori(evento.lavori);
-        return;
-      }
-
-      if (evento.tipo === 'bozza') {
-        bozzaInCorsoRef.current = { titolo: evento.titolo, contenuto: evento.contenuto };
-        return;
-      }
-
-      if (evento.tipo === 'delta') {
-        setAttivita(null);
-        setMessaggi((prev) => {
-          const ultimo = prev[prev.length - 1];
-          if (ultimo?.ruolo === 'assistente' && ultimo.isStreaming) {
-            return [...prev.slice(0, -1), { ...ultimo, testo: ultimo.testo + evento.testo }];
-          }
-          return [...prev, { id: nextId(), ruolo: 'assistente', testo: evento.testo, isStreaming: true }];
-        });
-        return;
-      }
-
-      setElaborando(false);
-      setAttivita(null);
-      setLavori([]);
-
-      if (evento.tipo === 'completato') {
-        const bozza = bozzaInCorsoRef.current ?? undefined;
-        bozzaInCorsoRef.current = null;
-        setMessaggi((prev) => {
-          const ultimo = prev[prev.length - 1];
-          const finali: Messaggio[] =
-            ultimo?.ruolo === 'assistente' && ultimo.isStreaming
-              ? [...prev.slice(0, -1), { ...ultimo, testo: evento.testo, isStreaming: false, bozza }]
-              : [...prev, { id: nextId(), ruolo: 'assistente', testo: evento.testo, bozza }];
-          onSalva({
-            id,
-            praticaId: pratica?.id ?? 'senza-pratica',
-            titolo: conversazione?.titolo ?? finali.find((m) => m.ruolo === 'avvocato')?.testo.slice(0, 60) ?? 'Conversazione',
-            procedura,
-            stato: 'completata',
-            aggiornataIl: new Date().toISOString(),
-            dispositivoOrigine: 'desktop',
-            piano,
-            messaggi: finali,
-          });
-          return finali;
-        });
-      } else if (evento.tipo === 'errore') {
-        setMessaggi((prev) => {
-          const ultimo = prev[prev.length - 1];
-          const finali: Messaggio[] =
-            ultimo?.ruolo === 'assistente' && ultimo.isStreaming && !ultimo.testo
-              ? [...prev.slice(0, -1), { ...ultimo, testo: evento.messaggio, isStreaming: false }]
-              : [...prev, { id: nextId(), ruolo: 'assistente', testo: evento.messaggio }];
-          onSalva({
-            id,
-            praticaId: pratica?.id ?? 'senza-pratica',
-            titolo: conversazione?.titolo ?? finali.find((m) => m.ruolo === 'avvocato')?.testo.slice(0, 60) ?? 'Conversazione',
-            procedura,
-            stato: 'interrotta',
-            aggiornataIl: new Date().toISOString(),
-            dispositivoOrigine: 'desktop',
-            piano,
-            messaggi: finali,
-          });
-          return finali;
-        });
-      }
-    });
-  }, [pratica, procedura, piano, conversazione?.titolo, onSalva]);
-
+  const ultimoTesto = messaggi.at(-1)?.testo.length ?? 0;
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messaggi, attivita, lavori.length]);
+  }, [messaggi.length, ultimoTesto, attivita, lavori.length]);
 
-  function invia() {
+  async function invia() {
     const testo = input.trim();
     if (!testo || elaborando) return;
-    const msgUtente: Messaggio = { id: nextId(), ruolo: 'avvocato', testo };
-    setMessaggi((prev) => [...prev, msgUtente]);
+    const id = idRef.current;
     setInput('');
-    setElaborando(true);
-    setAttivita('Sto pensando…');
-    void window.jarai.claude.invia({
-      conversazioneId: conversazioneIdRef.current,
-      testo,
-      qualita,
-      praticaId: pratica?.id,
-      praticaNome: pratica?.nome,
-      documenti: documentiPratica.map((d) => ({ nome: d.nome, percorso: d.percorso, cartella: d.cartella, tipo: d.tipo, pagine: d.pagine })),
-    });
+    setInviando(true);
+    setErroreInvio(null);
+    try {
+      await onPrimaDiInviare();
+      if (!conversazione) {
+        const creata = await comando({
+          tipo: 'conversazione.crea',
+          argomenti: { conversazioneId: id, modalita: 'pratica', praticaId: pratica?.id ?? null, titolo: '', procedura, qualita },
+        });
+        if (!creata.ok) throw new Error(creata.errore);
+      }
+      const inviata = await comando({ tipo: 'conversazione.invia', argomenti: { conversazioneId: id, testo, qualita } });
+      if (!inviata.ok) throw new Error(inviata.errore);
+    } catch (err) {
+      // La domanda torna nel composer: non si perde.
+      setInput(testo);
+      setErroreInvio(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInviando(false);
+    }
   }
 
   function ferma() {
-    void window.jarai.claude.ferma(conversazioneIdRef.current);
+    void comando({ tipo: 'conversazione.ferma', argomenti: { conversazioneId: idRef.current } });
   }
 
   return (
@@ -216,10 +156,10 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
                     Sto per salvare «Report spese ricorrenti» nella cartella JarAI - Bozze.
                   </div>
                   <div className="confirm-inline-actions">
-                    <button className="btn danger" onClick={() => setConfermaVisibile(false)}>
+                    <button className="btn danger" onClick={() => setConfermaChiusa(true)}>
                       Rifiuta
                     </button>
-                    <button className="btn primary" onClick={() => setConfermaVisibile(false)}>
+                    <button className="btn primary" onClick={() => setConfermaChiusa(true)}>
                       Approva
                     </button>
                   </div>
@@ -230,6 +170,11 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
         </div>
 
         <div className="composer-wrap">
+          {erroreInvio && (
+            <div className="artifact-processing" role="alert">
+              ⚠ {erroreInvio}
+            </div>
+          )}
           {pratica && (
             <div className="attached-files">
               <span className="attached-chip folder-context-chip">
@@ -249,7 +194,7 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  invia();
+                  void invia();
                 }
               }}
             />
@@ -258,7 +203,7 @@ export default function ConversazioneView({ pratiche, praticaId, conversazione, 
                 <StopIcon />
               </button>
             ) : (
-              <button className={`composer-send ${input.trim() ? 'ready' : ''}`} onClick={invia} disabled={!input.trim()}>
+              <button className={`composer-send ${input.trim() ? 'ready' : ''}`} onClick={() => void invia()} disabled={!input.trim()}>
                 <SendIcon size={15} />
               </button>
             )}

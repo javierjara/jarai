@@ -142,20 +142,47 @@ export function eventiDaConversazioneLegacy(
   return eventi;
 }
 
+// La migrazione avviene in due parti, ognuna con il suo segno "fatto" in
+// impostazione: le conversazioni delle pratiche passano a jarai.db con il
+// passo 4 (host), pratiche, documenti e Studio digitale con il passo 5.
+export const MIGRAZIONE_CONVERSAZIONI = 'migrazione.conversazioniPratica';
+export const MIGRAZIONE_RESTO = 'migrazione.resto';
+
+export function migrazioneFatta(db: Database, parte: string): boolean {
+  return db.prepare('SELECT 1 FROM impostazione WHERE chiave = ?').get(parte) !== undefined;
+}
+
+function segnaFatta(db: Database, parte: string, ora: string): void {
+  db.prepare('INSERT INTO impostazione (chiave, valore, aggiornata_il) VALUES (?, ?, ?)').run(parte, JSON.stringify(ora), ora);
+}
+
+type Opzioni = { orologio?: () => string };
+
 /**
- * Scrive in jarai.db tutto il contenuto del vecchio JSON, in una sola
- * transazione. Dopo aver scritto ogni conversazione la ricostruisce dal log
- * e la confronta con l'originale: alla prima differenza annulla tutto, così
+ * Prima parte: le conversazioni delle pratiche. In una sola transazione;
+ * dopo aver scritto ogni conversazione la ricostruisce dal log e la
+ * confronta con l'originale: alla prima differenza annulla tutto, così
  * l'app resta sul JSON e non si perde niente.
  */
-export function migraDaJson(db: Database, dati: DatiLegacy, opzioni: { orologio?: () => string } = {}): RiepilogoMigrazione {
+export function migraConversazioniPratica(
+  db: Database,
+  conversazioni: readonly ConversazioneLegacy[],
+  opzioni: Opzioni = {},
+): Pick<RiepilogoMigrazione, 'conversazioni' | 'eventi'> {
   const orologio = opzioni.orologio ?? (() => new Date().toISOString());
-  const store = new EventStore(db, orologio);
-
   return inTransazione(db, () => {
-    const giaPieno = db.prepare('SELECT (SELECT COUNT(*) FROM evento) + (SELECT COUNT(*) FROM pratica) AS n').get() as { n: number };
-    if (giaPieno.n > 0) throw new Error('Il database contiene già dati: migrazione non ripetuta.');
+    if (migrazioneFatta(db, MIGRAZIONE_CONVERSAZIONI)) throw new Error('Migrazione delle conversazioni già fatta.');
+    const eventi = scriviConversazioni(db, new EventStore(db, orologio), conversazioni.map((c) => ({ c, modalita: 'pratica' as const })));
+    segnaFatta(db, MIGRAZIONE_CONVERSAZIONI, orologio());
+    return { conversazioni: conversazioni.length, eventi };
+  });
+}
 
+/** Seconda parte: pratiche, documenti, impostazioni, idee e Studio digitale. */
+export function migraResto(db: Database, dati: DatiLegacy, opzioni: Opzioni = {}): Omit<RiepilogoMigrazione, 'conversazioni'> {
+  const orologio = opzioni.orologio ?? (() => new Date().toISOString());
+  return inTransazione(db, () => {
+    if (migrazioneFatta(db, MIGRAZIONE_RESTO)) throw new Error('Migrazione di pratiche e Studio digitale già fatta.');
     const ora = orologio();
     const impostazione = db.prepare('INSERT INTO impostazione (chiave, valore, aggiornata_il) VALUES (?, ?, ?)');
     if (dati.studio) impostazione.run('studio', JSON.stringify(dati.studio), ora);
@@ -188,40 +215,51 @@ export function migraDaJson(db: Database, dati: DatiLegacy, opzioni: { orologio?
     const idea = db.prepare('INSERT INTO idea (id, dati) VALUES (?, ?)');
     for (const i of dati.ideeSito ?? []) idea.run(i.id, JSON.stringify(i));
 
-    const conversazione = db.prepare(
-      'INSERT INTO conversazione (id, modalita, pratica_id, creata_il) VALUES (?, ?, ?, ?)',
-    );
-    const datiSito = db.prepare('INSERT INTO conversazione_sito (id, dati) VALUES (?, ?)');
-
-    // Ordine cronologico: il seq globale segue, per quanto possibile, il tempo.
-    const tutte = [
-      ...dati.conversazioni.map((c) => ({ c, modalita: 'pratica' as const })),
-      ...(dati.studioDigitale ?? []).map((c) => ({ c, modalita: 'studio-digitale' as const })),
-    ].sort((a, b) => a.c.aggiornataIl.localeCompare(b.c.aggiornataIl));
-
-    let eventi = 0;
-    for (const { c, modalita } of tutte) {
-      const nuovi = eventiDaConversazioneLegacy(c, modalita);
-      const creata = nuovi[0];
-      const praticaId = creata.tipo === 'conversazione_creata' ? creata.payload.praticaId : null;
-      conversazione.run(c.id, modalita, praticaId, c.aggiornataIl);
-      if (modalita === 'studio-digitale') {
-        const { messaggi: _messaggi, stato: _stato, ...editoriale } = c as ConversazioneSitoLegacy;
-        datiSito.run(c.id, JSON.stringify(editoriale));
-      }
-      eventi += store.appendi(nuovi).eventi.length;
-      verificaConversazione(store, c);
-    }
-
+    const sito = (dati.studioDigitale ?? []).map((c) => ({ c, modalita: 'studio-digitale' as const }));
+    const eventi = scriviConversazioni(db, new EventStore(db, orologio), sito);
+    segnaFatta(db, MIGRAZIONE_RESTO, orologio());
     return {
       pratiche: dati.pratiche.length,
       documenti,
-      conversazioni: dati.conversazioni.length,
-      conversazioniSito: dati.studioDigitale?.length ?? 0,
+      conversazioniSito: sito.length,
       idee: dati.ideeSito?.length ?? 0,
       eventi,
     };
   });
+}
+
+/** Le due parti insieme, in una sola transazione. */
+export function migraDaJson(db: Database, dati: DatiLegacy, opzioni: Opzioni = {}): RiepilogoMigrazione {
+  return inTransazione(db, () => {
+    const a = migraConversazioniPratica(db, dati.conversazioni, opzioni);
+    const b = migraResto(db, dati, opzioni);
+    return { ...b, conversazioni: a.conversazioni, eventi: a.eventi + b.eventi };
+  });
+}
+
+function scriviConversazioni(
+  db: Database,
+  store: EventStore,
+  elenco: Array<{ c: ConversazioneLegacy | ConversazioneSitoLegacy; modalita: 'pratica' | 'studio-digitale' }>,
+): number {
+  const conversazione = db.prepare('INSERT INTO conversazione (id, modalita, pratica_id, creata_il) VALUES (?, ?, ?, ?)');
+  const datiSito = db.prepare('INSERT INTO conversazione_sito (id, dati) VALUES (?, ?)');
+  // Ordine cronologico: il seq globale segue, per quanto possibile, il tempo.
+  const ordinate = [...elenco].sort((a, b) => a.c.aggiornataIl.localeCompare(b.c.aggiornataIl));
+  let eventi = 0;
+  for (const { c, modalita } of ordinate) {
+    const nuovi = eventiDaConversazioneLegacy(c, modalita);
+    const creata = nuovi[0];
+    const praticaId = creata.tipo === 'conversazione_creata' ? creata.payload.praticaId : null;
+    conversazione.run(c.id, modalita, praticaId, c.aggiornataIl);
+    if (modalita === 'studio-digitale') {
+      const { messaggi: _messaggi, stato: _stato, ...editoriale } = c as ConversazioneSitoLegacy;
+      datiSito.run(c.id, JSON.stringify(editoriale));
+    }
+    eventi += store.appendi(nuovi).eventi.length;
+    verificaConversazione(store, c);
+  }
+  return eventi;
 }
 
 /** Ricostruisce la conversazione dal log e la confronta con l'originale. */

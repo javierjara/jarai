@@ -5,6 +5,7 @@ import { registraGestionePratiche, registraProtocolloAudio } from './pratiche';
 import { registraAnteprimaDocumenti } from './documentPreview';
 import { registraCollegamentoClaude } from './claudeIpc';
 import { registraPersistenza } from './store';
+import { avviaHost } from './hostDesktop';
 import { registraBozze } from './bozze';
 import { registraTrascrizione } from './trascrizione';
 import { registraAudioSetup } from './audioSetup';
@@ -28,6 +29,12 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const devServerUrl = process.env['ELECTRON_RENDERER_URL'];
+
+// Solo in sviluppo: cartella dati separata, per provare (es. una migrazione)
+// su una copia senza toccare i dati veri. Ignorata nell'app impacchettata.
+if (!app.isPackaged && process.env['JARAI_USER_DATA']) {
+  app.setPath('userData', process.env['JARAI_USER_DATA']);
+}
 let mainWindow: BrowserWindow | null = null;
 
 function ricaricaFinestra(win: BrowserWindow): void {
@@ -116,7 +123,7 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // In sviluppo l'eseguibile è Electron stesso, quindi il Dock mostra la sua
   // icona di default finché non gliene diamo una esplicitamente. Nel
   // pacchetto finale l'icona è già quella giusta (build/icon.icns via
@@ -153,7 +160,10 @@ app.whenReady().then(() => {
   registraProtocolloAudio();
   registraAnteprimaDocumenti();
   registraCollegamentoClaude(() => mainWindow);
-  registraPersistenza();
+  // Prima della finestra: jarai.db, migrazione e canale jarai:busta devono
+  // esistere quando il renderer chiede il primo snapshot.
+  const { conversazioniNelDatabase } = await avviaHost(() => mainWindow);
+  registraPersistenza(conversazioniNelDatabase);
   registraBozze(() => mainWindow);
   registraTrascrizione(() => mainWindow);
   registraAudioSetup(() => mainWindow);

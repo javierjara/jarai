@@ -322,8 +322,11 @@ export interface RiepilogoConversazione {
   modalita: Modalita;
   praticaId: string | null;
   titolo: string;
+  procedura: Procedura | null;
   stato: StatoConversazione;
   aggiornataIl: string;
+  /** Dispositivo che ha creato la conversazione ("dal telefono" nello storico). */
+  creataDa?: string;
   attivita: string | null;
   confermeAperte: number;
   turnoId: string | null;
@@ -359,8 +362,10 @@ export function riduciElenco(stato: ProiezioneElenco, evento: Evento): Proiezion
           modalita: p.modalita,
           praticaId: p.praticaId,
           titolo: p.titolo,
+          procedura: p.procedura,
           stato: 'completata',
           aggiornataIl: evento.creatoIl,
+          ...(evento.dispositivoId ? { creataDa: evento.dispositivoId } : {}),
           attivita: null,
           confermeAperte: 0,
           turnoId: null,
