@@ -3,7 +3,9 @@ import type { Comando, Evento } from '../../shared/protocollo';
 import { messaggiVisibili, ricostruisciConversazione, riduciConversazione, type ProiezioneConversazione } from '../../shared/reducer';
 import { apriDatabase } from '../db';
 import { EventStore } from '../eventStore';
+import type { SnapshotEntita } from '../entita';
 import { Host, MESSAGGI, type EventoMotore, type Motore, type RichiestaMotore } from '../host';
+import { migraResto } from '../migrazioneJson';
 
 /** Agente finto: il test decide cosa emette e quando finisce. */
 class MotoreFinto implements Motore {
@@ -244,5 +246,110 @@ describe('Host: busta e riconnessione', () => {
     await motore.finisci('c1');
     const { eventi } = host.richiedi({ tipo: 'eventi.dopo', seq: elenco.ultimoSeq, limite: 100 }) as { eventi: Evento[] };
     expect(eventi.map((e) => e.tipo)).toEqual(['messaggio_utente', 'turno_iniziato', 'testo_assistente', 'turno_finito']);
+  });
+});
+
+describe('Host: entità (passo 5)', () => {
+  const PRATICA = {
+    id: 'p1',
+    nome: 'Rossi c. Bianchi',
+    cliente: 'Mario Rossi',
+    ambito: 'Civile' as const,
+    documenti: 1,
+    aggiornataIl: '2026-11-06T10:00:00.000Z',
+    cartellaPercorso: '/Pratiche/Rossi',
+  };
+  const DOC = { id: 'd1', nome: 'Citazione.pdf', tipo: 'pdf', data: '2026-09-01', cartella: 'Atti', percorso: '/Pratiche/Rossi/Citazione.pdf' };
+  const entita = (host: Host) => (host.richiedi({ tipo: 'snapshot.entita' }) as { entita: SnapshotEntita | null }).entita;
+
+  const migrato = () => {
+    const db = apriDatabase(':memory:');
+    migraResto(db, { pratiche: [], documenti: {}, conversazioni: [] });
+    return prepara(db);
+  };
+
+  it('prima della migrazione: niente snapshot e niente scritture', async () => {
+    const { host, comando } = prepara();
+    expect(entita(host)).toBeNull();
+    expect(await comando({ tipo: 'pratica.salva', argomenti: { pratica: PRATICA } })).toEqual({ ok: false, errore: MESSAGGI.datiNonPronti });
+  });
+
+  it('pratica, documenti, studio, idee: salvati e riletti, con un evento per ciascuno', async () => {
+    const { host, comando, ricevuti } = migrato();
+    await comando({ tipo: 'pratica.salva', argomenti: { pratica: PRATICA } });
+    await comando({ tipo: 'documenti.salva', argomenti: { praticaId: 'p1', documenti: [DOC] } });
+    await comando({ tipo: 'studio.salva', argomenti: { studio: { nome: 'Studio Prova', avvocato: 'Avv. Prova' } } });
+    await comando({ tipo: 'idee.salva', argomenti: { idee: [{ id: 'i1', titolo: 'Idea', stato: 'da_valutare' }] } });
+    await comando({ tipo: 'preferenzeSito.salva', argomenti: { preferenze: { obiettivoSettimana: 2 } } });
+
+    const e = entita(host)!;
+    expect(e.pratiche).toEqual([PRATICA]);
+    expect(e.documenti).toEqual({ p1: [DOC] });
+    expect(e.studio).toEqual({ nome: 'Studio Prova', avvocato: 'Avv. Prova' });
+    expect(e.ideeSito).toEqual([{ id: 'i1', titolo: 'Idea', stato: 'da_valutare' }]);
+    expect(e.preferenzeSito).toEqual({ obiettivoSettimana: 2 });
+    expect(ricevuti.filter((x) => x.tipo === 'entita_cambiata').map((x) => (x.payload as { entita: string }).entita)).toEqual([
+      'pratica',
+      'documento',
+      'studio',
+      'idea',
+      'preferenze',
+    ]);
+  });
+
+  it("l'agente riceve i documenti della pratica da jarai.db", async () => {
+    const { motore, comando, crea, invia } = migrato();
+    await comando({ tipo: 'pratica.salva', argomenti: { pratica: PRATICA } });
+    await comando({ tipo: 'documenti.salva', argomenti: { praticaId: 'p1', documenti: [DOC] } });
+    await crea('c1', 'p1');
+    await invia('Cosa dice la citazione?');
+    expect(motore.richieste[0].documenti).toEqual([DOC]);
+  });
+
+  it('documenti di una pratica inesistente: rifiutati', async () => {
+    const { comando } = migrato();
+    expect(await comando({ tipo: 'documenti.salva', argomenti: { praticaId: 'nessuna', documenti: [DOC] } })).toEqual({
+      ok: false,
+      errore: MESSAGGI.praticaNonTrovata,
+    });
+  });
+
+  it('eliminare una pratica toglie anche i suoi documenti', async () => {
+    const { host, comando } = migrato();
+    await comando({ tipo: 'pratica.salva', argomenti: { pratica: PRATICA } });
+    await comando({ tipo: 'documenti.salva', argomenti: { praticaId: 'p1', documenti: [DOC] } });
+    await comando({ tipo: 'pratica.elimina', argomenti: { praticaId: 'p1' } });
+    expect(entita(host)).toMatchObject({ pratiche: [], documenti: {} });
+  });
+
+  it('Studio digitale: articolo creato dalla finestra, domanda, risposta e dati editoriali insieme', async () => {
+    const { host, motore, comando, invia } = migrato();
+    const dati = { id: 's1', titolo: 'Nuovo articolo', modificato: false, copertina: { file: 'c.png', alt: 'x', origine: 'foto' } };
+    await comando({ tipo: 'conversazioneSito.salva', argomenti: { dati } });
+    // La conversazione esiste già: l'invio la ritrova senza crearla.
+    await invia('Scrivi un articolo sul mantenimento', 's1');
+    expect(motore.richieste[0]).toMatchObject({ modalita: 'studio-digitale', praticaId: null, documenti: [] });
+    motore.emetti('s1', { tipo: 'completato', testo: 'Ecco la bozza.' });
+    await motore.finisci('s1');
+
+    const sito = entita(host)!.studioDigitale;
+    expect(sito).toHaveLength(1);
+    expect(sito[0]).toMatchObject({ id: 's1', titolo: 'Nuovo articolo', copertina: { file: 'c.png' }, stato: 'completata' });
+    expect(sito[0].messaggi.map((m) => m.testo)).toEqual(['Scrivi un articolo sul mantenimento', 'Ecco la bozza.']);
+
+    await comando({ tipo: 'conversazioneSito.elimina', argomenti: { conversazioneId: 's1' } });
+    expect(entita(host)!.studioDigitale).toEqual([]);
+    expect(host.conversazione('s1')).toBeNull();
+  });
+
+  it('i dati editoriali non salvano messaggi e stato, anche se arrivano', async () => {
+    const { host, comando, db } = migrato();
+    await comando({
+      tipo: 'conversazioneSito.salva',
+      argomenti: { dati: { id: 's1', titolo: 'T', messaggi: [{ id: 'x', ruolo: 'avvocato', testo: 'fantasma' }], stato: 'in_corso' } },
+    });
+    const salvato = JSON.parse((db.prepare("SELECT dati FROM conversazione_sito WHERE id = 's1'").get() as { dati: string }).dati);
+    expect(salvato).toEqual({ id: 's1', titolo: 'T' });
+    expect(entita(host)!.studioDigitale[0].messaggi).toEqual([]);
   });
 });

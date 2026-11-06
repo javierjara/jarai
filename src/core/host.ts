@@ -4,6 +4,7 @@ import {
   type Articolo,
   type Busta,
   type Comando,
+  type Documento,
   type EsitoComando,
   type Evento,
   type IdeaProposta,
@@ -21,7 +22,19 @@ import {
   type ProiezioneElenco,
 } from '../shared/reducer';
 import { inTransazione, type Database } from './db';
+import {
+  documentiPratica,
+  eliminaDatiConversazioneSito,
+  eliminaPratica,
+  leggiEntita,
+  salvaDatiConversazioneSito,
+  salvaDocumenti,
+  salvaIdee,
+  salvaImpostazione,
+  salvaPratica,
+} from './entita';
 import { EventStore, type EventoNuovo } from './eventStore';
+import { MIGRAZIONE_RESTO, migrazioneFatta } from './migrazioneJson';
 
 // Host (docs/eventstore-protocollo.md §2): l'unico che scrive lo stato delle
 // conversazioni. Riceve comandi da qualsiasi client (finestra Electron oggi,
@@ -54,6 +67,8 @@ export interface RichiestaMotore {
   testo: string;
   qualita: Qualita;
   praticaId: string | null;
+  /** Documenti della pratica, da jarai.db (vuoto prima della migrazione: il motore può cercarli altrove). */
+  documenti: Documento[];
   /** Sessione dell'SDK da riprendere: c'è anche dopo un riavvio. */
   resume?: string;
 }
@@ -92,6 +107,8 @@ export const MESSAGGI = {
   senzaEsito: 'La risposta si è interrotta senza un esito. Riprova.',
   chiusuraApp: 'Risposta interrotta: JarAI è stato chiuso prima della fine.',
   erroreInterno: 'Si è verificato un problema interno. Riprova.',
+  praticaNonTrovata: 'Questa pratica non esiste più.',
+  datiNonPronti: 'I dati dello studio non sono ancora pronti: riavvia JarAI.',
 } as const;
 
 export class Host {
@@ -153,6 +170,8 @@ export class Host {
 
   richiedi(r: Richiesta): unknown {
     switch (r.tipo) {
+      case 'snapshot.entita':
+        return { entita: leggiEntita(this.db, (id) => this.conversazione(id)) };
       case 'snapshot.elenco':
         return { elenco: this.elenco };
       case 'snapshot.conversazione':
@@ -199,23 +218,7 @@ export class Host {
       case 'conversazione.crea': {
         const a = comando.argomenti;
         if (this.elenco.conversazioni[a.conversazioneId]) return this.ok();
-        const scritti = inTransazione(this.db, () => {
-          this.db
-            .prepare('INSERT OR IGNORE INTO conversazione (id, modalita, pratica_id, creata_il) VALUES (?, ?, ?, ?)')
-            .run(a.conversazioneId, a.modalita, a.praticaId, this.orologio());
-          return this.scrivi(
-            [
-              {
-                tipo: 'conversazione_creata',
-                conversazioneId: a.conversazioneId,
-                ...da,
-                payload: { modalita: a.modalita, praticaId: a.praticaId, titolo: a.titolo, procedura: a.procedura, qualita: a.qualita },
-              },
-            ],
-            comandoId,
-          );
-        });
-        return this.ok(scritti);
+        return this.ok(this.scriviInTransazione(() => this.creaConversazione(a, da), comandoId));
       }
 
       case 'conversazione.invia': {
@@ -262,17 +265,7 @@ export class Host {
       case 'conversazione.elimina': {
         const { conversazioneId } = comando.argomenti;
         if (!this.elenco.conversazioni[conversazioneId]) return this.ok();
-        const t = this.turni.get(conversazioneId);
-        if (t) {
-          t.fermato = true;
-          this.motore.ferma(conversazioneId);
-        }
-        const scritti = inTransazione(this.db, () => {
-          this.db.prepare('UPDATE conversazione SET eliminata_il = ? WHERE id = ?').run(this.orologio(), conversazioneId);
-          return this.scrivi([{ tipo: 'conversazione_eliminata', conversazioneId, ...da, payload: {} }], comandoId);
-        });
-        this.cache.delete(conversazioneId);
-        return this.ok(scritti);
+        return this.ok(this.scriviInTransazione(() => this.eliminaConversazione(conversazioneId, da), comandoId));
       }
 
       case 'conversazione.rispondiConferma': {
@@ -286,12 +279,128 @@ export class Host {
           ),
         );
       }
+
+      // ─── Entità (passo 5) ───
+      case 'pratica.salva':
+      case 'pratica.elimina':
+      case 'documenti.salva':
+      case 'studio.salva':
+      case 'preferenzeSito.salva':
+      case 'idee.salva':
+      case 'conversazioneSito.salva':
+      case 'conversazioneSito.elimina':
+        // Prima della migrazione le entità stanno ancora nel JSON: scriverle
+        // qui farebbe fallire la migrazione (chiavi già presenti).
+        if (!migrazioneFatta(this.db, MIGRAZIONE_RESTO)) return { ok: false, errore: MESSAGGI.datiNonPronti };
+        return this.eseguiEntita(comando, da);
     }
+  }
+
+  private eseguiEntita(comando: Comando, da: Pick<EventoNuovo, 'dispositivoId' | 'utenteId'>): EsitoComando {
+    const ora = this.orologio();
+    const cambiata = (
+      entita: Extract<Evento, { tipo: 'entita_cambiata' }>['payload']['entita'],
+      id: string,
+      azione: 'creata' | 'aggiornata' | 'eliminata',
+    ): EventoNuovo => ({ tipo: 'entita_cambiata', conversazioneId: null, ...da, payload: { entita, id, azione } });
+    const praticaEsiste = (id: string) => this.db.prepare('SELECT 1 FROM pratica WHERE id = ?').get(id) !== undefined;
+
+    switch (comando.tipo) {
+      case 'pratica.salva': {
+        const p = comando.argomenti.pratica;
+        const nuova = !praticaEsiste(p.id);
+        return this.ok(this.scriviInTransazione(() => (salvaPratica(this.db, p), [cambiata('pratica', p.id, nuova ? 'creata' : 'aggiornata')]), comando.comandoId));
+      }
+      case 'pratica.elimina': {
+        const { praticaId } = comando.argomenti;
+        if (!praticaEsiste(praticaId)) return this.ok();
+        return this.ok(this.scriviInTransazione(() => (eliminaPratica(this.db, praticaId), [cambiata('pratica', praticaId, 'eliminata')]), comando.comandoId));
+      }
+      case 'documenti.salva': {
+        const { praticaId, documenti } = comando.argomenti;
+        if (!praticaEsiste(praticaId)) return { ok: false, errore: MESSAGGI.praticaNonTrovata };
+        return this.ok(
+          this.scriviInTransazione(() => (salvaDocumenti(this.db, praticaId, documenti), [cambiata('documento', praticaId, 'aggiornata')]), comando.comandoId),
+        );
+      }
+      case 'studio.salva':
+        return this.ok(
+          this.scriviInTransazione(() => (salvaImpostazione(this.db, 'studio', comando.argomenti.studio, ora), [cambiata('studio', 'studio', 'aggiornata')]), comando.comandoId),
+        );
+      case 'preferenzeSito.salva':
+        return this.ok(
+          this.scriviInTransazione(
+            () => (salvaImpostazione(this.db, 'preferenzeSito', comando.argomenti.preferenze, ora), [cambiata('preferenze', 'preferenzeSito', 'aggiornata')]),
+            comando.comandoId,
+          ),
+        );
+      case 'idee.salva':
+        return this.ok(this.scriviInTransazione(() => (salvaIdee(this.db, comando.argomenti.idee), [cambiata('idea', '*', 'aggiornata')]), comando.comandoId));
+      case 'conversazioneSito.salva': {
+        const { dati } = comando.argomenti;
+        return this.ok(
+          this.scriviInTransazione(() => {
+            // L'articolo nasce nella finestra: la conversazione si crea qui
+            // se non c'è ancora (l'invio della prima domanda la ritrova).
+            const nuova = this.elenco.conversazioni[dati.id]
+              ? []
+              : this.creaConversazione(
+                  { conversazioneId: dati.id, modalita: 'studio-digitale', praticaId: null, titolo: dati.titolo, procedura: null, qualita: 'Standard' },
+                  da,
+                );
+            salvaDatiConversazioneSito(this.db, dati);
+            return [...nuova, cambiata('conversazione_sito', dati.id, nuova.length ? 'creata' : 'aggiornata')];
+          }, comando.comandoId),
+        );
+      }
+      case 'conversazioneSito.elimina': {
+        const { conversazioneId } = comando.argomenti;
+        return this.ok(
+          this.scriviInTransazione(() => {
+            eliminaDatiConversazioneSito(this.db, conversazioneId);
+            const eliminata = this.elenco.conversazioni[conversazioneId] ? this.eliminaConversazione(conversazioneId, da) : [];
+            return [...eliminata, cambiata('conversazione_sito', conversazioneId, 'eliminata')];
+          }, comando.comandoId),
+        );
+      }
+      default:
+        return { ok: false, errore: MESSAGGI.erroreInterno };
+    }
+  }
+
+  /** Scrive la riga della conversazione e restituisce l'evento da registrare. */
+  private creaConversazione(
+    a: Extract<Comando, { tipo: 'conversazione.crea' }>['argomenti'],
+    da: Pick<EventoNuovo, 'dispositivoId' | 'utenteId'>,
+  ): EventoNuovo[] {
+    this.db
+      .prepare('INSERT OR IGNORE INTO conversazione (id, modalita, pratica_id, creata_il) VALUES (?, ?, ?, ?)')
+      .run(a.conversazioneId, a.modalita, a.praticaId, this.orologio());
+    return [
+      {
+        tipo: 'conversazione_creata',
+        conversazioneId: a.conversazioneId,
+        ...da,
+        payload: { modalita: a.modalita, praticaId: a.praticaId, titolo: a.titolo, procedura: a.procedura, qualita: a.qualita },
+      },
+    ];
+  }
+
+  /** Ferma un'eventuale risposta in corso, segna la riga e restituisce l'evento. */
+  private eliminaConversazione(conversazioneId: string, da: Pick<EventoNuovo, 'dispositivoId' | 'utenteId'>): EventoNuovo[] {
+    const t = this.turni.get(conversazioneId);
+    if (t) {
+      t.fermato = true;
+      this.motore.ferma(conversazioneId);
+    }
+    this.db.prepare('UPDATE conversazione SET eliminata_il = ? WHERE id = ?').run(this.orologio(), conversazioneId);
+    this.cache.delete(conversazioneId);
+    return [{ tipo: 'conversazione_eliminata', conversazioneId, ...da, payload: {} }];
   }
 
   // ─── Turno dell'assistente ───────────────────────────────────────────────
 
-  private async avviaTurno(r: Omit<RichiestaMotore, 'resume'> & { turnoId: string }): Promise<void> {
+  private async avviaTurno(r: Omit<RichiestaMotore, 'resume' | 'documenti'> & { turnoId: string }): Promise<void> {
     const { conversazioneId, turnoId } = r;
     const t: TurnoAttivo = { turnoId, parziale: '', numeroBozza: 0, fermato: false, chiuso: false };
     this.turni.set(conversazioneId, t);
@@ -349,9 +458,10 @@ export class Host {
       }
     };
 
+    const documenti = r.praticaId ? documentiPratica(this.db, r.praticaId) : [];
     try {
       await this.motore.esegui(
-        { ...r, ...(riga?.sdk_session_id ? { resume: riga.sdk_session_id } : {}) },
+        { ...r, documenti, ...(riga?.sdk_session_id ? { resume: riga.sdk_session_id } : {}) },
         (e) => {
           try {
             emetti(e);
@@ -399,6 +509,16 @@ export class Host {
   }
 
   // ─── Scrittura e pubblicazione ──────────────────────────────────────────
+
+  /**
+   * Scritture nelle tabelle ed eventi nella stessa transazione; gli
+   * abbonati li ricevono solo dopo il commit, mai per una scrittura annullata.
+   */
+  private scriviInTransazione(fn: () => EventoNuovo[], comandoId: string): Evento[] {
+    const eventi = inTransazione(this.db, () => this.store.appendi(fn(), { comandoId }).eventi);
+    this.pubblica(eventi);
+    return eventi;
+  }
 
   private scrivi(nuovi: EventoNuovo[], comandoId?: string): Evento[] {
     const { eventi } = this.store.appendi(nuovi, comandoId ? { comandoId } : {});

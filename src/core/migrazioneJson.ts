@@ -57,7 +57,8 @@ export interface DatiLegacy {
     string,
     Array<{ id: string; nome: string; tipo: string; pagine?: number; data: string; cartella: string; dimensione?: number; percorso?: string }>
   >;
-  conversazioni: ConversazioneLegacy[];
+  /** Facoltativo: dal passo 4 il JSON salvato non le contiene più. */
+  conversazioni?: ConversazioneLegacy[];
   studio?: { nome: string; avvocato: string };
   studioDigitale?: ConversazioneSitoLegacy[];
   ideeSito?: Array<{ id: string; [campo: string]: unknown }>;
@@ -231,7 +232,7 @@ export function migraResto(db: Database, dati: DatiLegacy, opzioni: Opzioni = {}
 /** Le due parti insieme, in una sola transazione. */
 export function migraDaJson(db: Database, dati: DatiLegacy, opzioni: Opzioni = {}): RiepilogoMigrazione {
   return inTransazione(db, () => {
-    const a = migraConversazioniPratica(db, dati.conversazioni, opzioni);
+    const a = migraConversazioniPratica(db, dati.conversazioni ?? [], opzioni);
     const b = migraResto(db, dati, opzioni);
     return { ...b, conversazioni: a.conversazioni, eventi: a.eventi + b.eventi };
   });

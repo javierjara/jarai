@@ -9,6 +9,9 @@ export const VERSIONE_PROTOCOLLO = 1;
 
 export const richiestaSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('snapshot.elenco') }),
+  // Pratiche, documenti, impostazioni, idee, articoli. null finché la
+  // migrazione dal vecchio JSON non è fatta: il client resta sul JSON.
+  z.object({ tipo: z.literal('snapshot.entita') }),
   z.object({ tipo: z.literal('snapshot.conversazione'), conversazioneId: z.string() }),
   z.object({
     tipo: z.literal('eventi.dopo'),

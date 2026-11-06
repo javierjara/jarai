@@ -3,19 +3,21 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { apriDatabase } from '../core/db';
 import { Host, type EventoMotore, type Motore } from '../core/host';
-import { MIGRAZIONE_CONVERSAZIONI, migraConversazioniPratica, migrazioneFatta } from '../core/migrazioneJson';
+import { MIGRAZIONE_CONVERSAZIONI, MIGRAZIONE_RESTO, migraConversazioniPratica, migraResto, migrazioneFatta } from '../core/migrazioneJson';
 import { fermaMessaggio, inviaMessaggio, type EventoAgente } from './agentRunner';
 import { registraErroreGrezzo } from './logger';
 import { caricaDati, DATI_PATH } from './store';
 
-// L'host sul desktop (docs/eventstore-protocollo.md, passo 4): jarai.db
+// L'host sul desktop (docs/eventstore-protocollo.md, passi 4 e 5): jarai.db
 // nella cartella dati dell'app, l'agente di agentRunner come Motore e la
-// finestra collegata via IPC. Le conversazioni delle pratiche passano tutte
-// di qui; lo Studio digitale usa ancora claude:invia fino al passo 5.
+// finestra collegata via IPC. Conversazioni, pratiche, documenti e Studio
+// digitale passano tutti di qui. Solo la richiesta di idee usa ancora
+// claude:invia: è una chiamata singola, non una conversazione da tenere.
 
 const DB_PATH = () => join(app.getPath('userData'), 'jarai.db');
 // Copia del JSON presa prima della migrazione: la via di ritorno.
 const COPIA_PATH = () => join(app.getPath('userData'), 'jarai-dati.prima-di-jarai-db.json');
+const RINOMINATO_PATH = () => join(app.getPath('userData'), `jarai-dati.migrato-${new Date().toISOString().slice(0, 10)}.json`);
 const DISPOSITIVO_DESKTOP = 'desktop';
 
 export interface HostDesktop {
@@ -53,6 +55,33 @@ export async function avviaHost(getWindow: () => BrowserWindow | null): Promise<
     }
   }
 
+  // Seconda parte (passo 5): pratiche, documenti, impostazioni, Studio
+  // digitale. Solo dopo la prima: se quella è fallita, tutto resta sul JSON.
+  if (migrate && !migrazioneFatta(db, MIGRAZIONE_RESTO)) {
+    const fileEsiste = await fs.access(DATI_PATH()).then(
+      () => true,
+      () => false,
+    );
+    const dati = await caricaDati();
+    if (fileEsiste && !dati) {
+      void registraErroreGrezzo('migrazione-entita', 'jarai-dati.json presente ma non leggibile: migrazione rimandata');
+    } else {
+      try {
+        const r = migraResto(db, dati ?? { pratiche: [], documenti: {}, conversazioni: [] });
+        void registraErroreGrezzo(
+          'migrazione-entita',
+          `fatta: ${r.pratiche} pratiche, ${r.documenti} documenti, ${r.conversazioniSito} articoli, ${r.idee} idee, ${r.eventi} eventi`,
+        );
+        // Il JSON non serve più: si rinomina (mai cancellato) così nessuno
+        // lo legge per sbaglio, e resta come copia dello stato di oggi.
+        if (fileEsiste) await fs.rename(DATI_PATH(), RINOMINATO_PATH());
+      } catch (err) {
+        // Annullata per intero: la finestra resta sul JSON (snapshot.entita null).
+        void registraErroreGrezzo('migrazione-entita', err instanceof Error ? (err.stack ?? err.message) : String(err));
+      }
+    }
+  }
+
   const host = new Host(db, motoreDesktop, {
     registraErrore: (contesto, dettaglio) => void registraErroreGrezzo(`host ${contesto}`, dettaglio),
   });
@@ -67,12 +96,13 @@ export async function avviaHost(getWindow: () => BrowserWindow | null): Promise<
   return { host, conversazioniNelDatabase: () => migrate };
 }
 
-// L'agente di sempre (agentRunner) visto dall'host. Pratiche e documenti
-// stanno ancora nel JSON (passo 5): si leggono al momento dell'invio.
+// L'agente di sempre (agentRunner) visto dall'host. I documenti arrivano da
+// jarai.db; finché le pratiche non sono migrate (migrazione fallita) si
+// leggono dal JSON, come prima.
 const motoreDesktop: Motore = {
   async esegui(r, emetti) {
-    const dati = r.praticaId ? await caricaDati() : null;
-    const documenti = (r.praticaId ? (dati?.documenti[r.praticaId] ?? []) : []).map((d) => ({
+    const daJson = r.praticaId && r.documenti.length === 0 ? ((await caricaDati())?.documenti[r.praticaId] ?? []) : [];
+    const documenti = (r.documenti.length ? r.documenti : daJson).map((d) => ({
       nome: d.nome,
       percorso: d.percorso,
       cartella: d.cartella,

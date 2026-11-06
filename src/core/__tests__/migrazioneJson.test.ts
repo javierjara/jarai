@@ -187,7 +187,7 @@ describe('migraDaJson', () => {
     const conCampoIgnoto: DatiLegacy = {
       ...DATI,
       conversazioni: [
-        ...DATI.conversazioni,
+        ...DATI.conversazioni!,
         {
           id: 'c-strana',
           praticaId: 'p1',
@@ -211,10 +211,10 @@ describe('migraDaJson', () => {
 
   it('le due parti si possono fare in momenti diversi', () => {
     const db = apriDatabase(':memory:');
-    expect(migraConversazioniPratica(db, DATI.conversazioni, { orologio }).conversazioni).toBe(4);
+    expect(migraConversazioniPratica(db, DATI.conversazioni!, { orologio }).conversazioni).toBe(4);
     expect(migrazioneFatta(db, MIGRAZIONE_CONVERSAZIONI)).toBe(true);
     expect(migrazioneFatta(db, MIGRAZIONE_RESTO)).toBe(false);
-    expect(() => migraConversazioniPratica(db, DATI.conversazioni, { orologio })).toThrow(/già fatta/);
+    expect(() => migraConversazioniPratica(db, DATI.conversazioni!, { orologio })).toThrow(/già fatta/);
     expect(migraResto(db, DATI, { orologio })).toMatchObject({ pratiche: 1, conversazioniSito: 1 });
     expect(migrazioneFatta(db, MIGRAZIONE_RESTO)).toBe(true);
   });
@@ -228,6 +228,6 @@ describe.runIf(process.env.JARAI_DATI_REALI)('dati reali', () => {
     const dati = JSON.parse(readFileSync(process.env.JARAI_DATI_REALI!, 'utf-8')) as DatiLegacy;
     const r = migraDaJson(apriDatabase(':memory:'), dati);
     console.log('Migrazione dati reali:', r);
-    expect(r.conversazioni).toBe(dati.conversazioni.length);
+    expect(r.conversazioni).toBe(dati.conversazioni?.length ?? 0);
   });
 });

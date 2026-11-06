@@ -281,7 +281,7 @@ I dati d'esempio (`datiIniziali.ts`) vengono creati dall'host al primo avvio
    *Fatto quando:* cambiando vista a metà risposta e tornando indietro la
    risposta è completa; chiudendo e riaprendo l'app la conversazione
    riprende con contesto (`resume`).
-5. **Pratiche, documenti e Studio digitale sull'host**. Si eliminano `dati:salva` e `store.ts`.
+5. **Pratiche, documenti e Studio digitale sull'host**. ✅ Le viste modificano lo stato React come prima; `src/renderer/src/sincronizza.ts` manda all'host solo le differenze come comandi (`pratica.salva`, `documenti.salva`, `conversazioneSito.salva`…). I messaggi dello Studio digitale passano dall'host; la richiesta di idee resta una chiamata singola. `jarai-dati.json` viene rinominato dopo la migrazione. `dati:carica`/`dati:salva` e `store.ts` restano **solo come ripiego** se la migrazione fallisce (snapshot.entita = null): l'app non si apre mai vuota.
    *Fatto quando:* nel renderer non resta nessuna scrittura diretta di stato.
 6. **Strumento di verifica**: una pagina nascosta di debug (solo in dev) che
    fa da "secondo client" sullo stesso host, con il suo cursore. È la prova

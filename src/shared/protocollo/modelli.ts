@@ -76,3 +76,44 @@ export type Articolo = z.infer<typeof articoloSchema>;
 export type IdeaProposta = z.infer<typeof ideaPropostaSchema>;
 export type PassoPiano = z.infer<typeof passoPianoSchema>;
 export type LavoroDocumento = z.infer<typeof lavoroDocumentoSchema>;
+
+// ─── Entità (passo 5): pratiche, documenti, impostazioni, Studio digitale ──
+
+export const ambitoSchema = z.enum(['Civile', 'Famiglia', 'Bancario', 'Lavoro', 'Societario', 'Successioni']);
+
+export const praticaSchema = z.object({
+  id: z.string().min(1),
+  nome: z.string(),
+  cliente: z.string(),
+  controparte: z.string().optional(),
+  ambito: ambitoSchema,
+  note: z.string().optional(),
+  documenti: z.number().int().nonnegative(),
+  aggiornataIl: z.string(),
+  cartellaPercorso: z.string().nullable(),
+});
+
+export const documentoSchema = z.object({
+  id: z.string().min(1),
+  nome: z.string(),
+  tipo: z.string(),
+  pagine: z.number().optional(),
+  data: z.string(),
+  cartella: z.string(),
+  dimensione: z.number().optional(),
+  percorso: z.string().optional(),
+});
+
+export const studioSchema = z.object({ nome: z.string(), avvocato: z.string() });
+
+// Forme che cambiano spesso con lo Studio digitale: si validano solo i
+// campi su cui si appoggia l'host, il resto passa così com'è.
+export const preferenzeSitoSchema = z.looseObject({ obiettivoSettimana: z.number() });
+export const ideaSchema = z.looseObject({ id: z.string().min(1) });
+/** Dati editoriali di un articolo: tutto tranne messaggi e stato, che sono dell'host. */
+export const datiConversazioneSitoSchema = z.looseObject({ id: z.string().min(1), titolo: z.string() });
+
+export type Pratica = z.infer<typeof praticaSchema>;
+export type Documento = z.infer<typeof documentoSchema>;
+export type Studio = z.infer<typeof studioSchema>;
+export type DatiConversazioneSito = z.infer<typeof datiConversazioneSitoSchema>;

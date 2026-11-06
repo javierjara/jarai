@@ -7,7 +7,8 @@ import Settings from './components/Settings';
 import StudioDigitaleView from './components/StudioDigitaleView';
 import { PREFERENZE_SITO_DEFAULT, useStudioDigitale } from './components/studio/useStudioDigitale';
 import { AVVOCATO_NOME, DOCUMENTI, PRATICHE, STUDIO_NOME } from './data/datiIniziali';
-import { comando, useElenco } from './host';
+import { caricaEntita, comando, useElenco } from './host';
+import { differenze, type StatoEntita } from './sincronizza';
 import { AMBITI, PROCEDURE } from './types';
 import type { RiepilogoConversazione } from '../../shared/reducer';
 import type { Conversazione, ConversazioneSito, Documento, FileImportato, Idea, MainView, Pratica, PreferenzeSito, StatoPersistito, Studio } from './types';
@@ -78,23 +79,38 @@ export default function App() {
     };
   }, []);
 
-  // Persistenza locale (spec §8, in attesa di SQLite — Fase 5): al primo
-  // avvio carica quanto salvato in precedenza; se non c'è nulla (primo
-  // avvio in assoluto) restano i dati d'esempio già nello stato iniziale.
+  // Dati dello studio (passo 5): all'avvio arrivano dall'host (jarai.db).
+  // Se la migrazione dal vecchio JSON non è riuscita, l'host risponde null e
+  // si resta sul JSON come prima: l'app non si apre mai vuota per questo.
+  const conJsonRef = useRef(false);
+  // Ultimo stato che l'host conosce: il salvataggio manda solo le differenze.
+  const salvatoRef = useRef<StatoEntita | null>(null);
   useEffect(() => {
-    window.jarai.dati.carica().then((salvato) => {
-      const stato = salvato as StatoPersistito | null;
-      if (stato) {
-        setPratiche(stato.pratiche);
-        setDocumenti(stato.documenti);
-        if (stato.studio) setStudio(stato.studio);
-        if (stato.studioDigitale) setStudioDigitale(stato.studioDigitale);
-        if (stato.ideeSito) setIdeeSito(stato.ideeSito);
-        if (stato.preferenzeSito) setPreferenzeSito(stato.preferenzeSito);
+    void (async () => {
+      const entita = await caricaEntita();
+      conJsonRef.current = entita === null;
+      const salvato = (entita ?? (await window.jarai.dati.carica())) as StatoPersistito | null;
+      if (salvato) {
+        const iniziale: StatoEntita = {
+          // cartellaTrovata non si salva più: si ricalcola qui sotto.
+          pratiche: salvato.pratiche.map((p) => ({ ...p, cartellaTrovata: p.cartellaTrovata ?? true })),
+          documenti: salvato.documenti,
+          studio: salvato.studio ?? { nome: STUDIO_NOME, avvocato: AVVOCATO_NOME },
+          studioDigitale: salvato.studioDigitale ?? [],
+          ideeSito: salvato.ideeSito ?? [],
+          preferenzeSito: salvato.preferenzeSito ?? PREFERENZE_SITO_DEFAULT,
+        };
+        setPratiche(iniziale.pratiche);
+        setDocumenti(iniziale.documenti);
+        setStudio(iniziale.studio);
+        setStudioDigitale(iniziale.studioDigitale);
+        setIdeeSito(iniziale.ideeSito);
+        setPreferenzeSito(iniziale.preferenzeSito);
+        salvatoRef.current = iniziale;
         // "Cartella non trovata" (spec §5.3): controllo leggero all'avvio per
         // ogni pratica legata a una cartella — rinominata o spostata dopo
         // l'ultima apertura di JarAI, per esempio.
-        const percorsi = stato.pratiche.map((p) => p.cartellaPercorso).filter((p): p is string => !!p);
+        const percorsi = iniziale.pratiche.map((p) => p.cartellaPercorso).filter((p): p is string => !!p);
         if (percorsi.length > 0) {
           window.jarai.verificaCartelle(percorsi).then((trovate) => {
             setPratiche((prev) => prev.map((p) => (p.cartellaPercorso ? { ...p, cartellaTrovata: trovate[p.cartellaPercorso] ?? false } : p)));
@@ -102,33 +118,58 @@ export default function App() {
         }
       }
       setPronto(true);
-    });
+    })();
   }, []);
 
-  // Salva su disco a ogni cambiamento, con un piccolo debounce per non
-  // scrivere il file a ogni singolo tasto premuto (es. mentre si scrivono le
-  // istruzioni di una pratica).
-  // Le conversazioni delle pratiche non passano più di qui: stanno in jarai.db.
+  // Salvataggio a ogni cambiamento, con un piccolo debounce per non scrivere
+  // a ogni tasto premuto (es. mentre si scrivono le note di una pratica).
+  // Le conversazioni non passano di qui: stanno nell'host.
   const salvaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const daSalvare = { pratiche, documenti, studio, studioDigitale, ideeSito, preferenzeSito };
+  const daSalvare: StatoEntita = { pratiche, documenti, studio, studioDigitale, ideeSito, preferenzeSito };
   const daSalvareRef = useRef(daSalvare);
   daSalvareRef.current = daSalvare;
+  // Un salvataggio alla volta, in ordine: i comandi di uno non si mescolano
+  // con quelli del successivo.
+  const codaSalvataggi = useRef<Promise<void>>(Promise.resolve());
+  const salva = useCallback((): Promise<void> => {
+    codaSalvataggi.current = codaSalvataggi.current.then(async () => {
+      const dopo = daSalvareRef.current;
+      if (conJsonRef.current) {
+        await window.jarai.dati.salva(dopo);
+        return;
+      }
+      const prima = salvatoRef.current;
+      if (!prima) return;
+      salvatoRef.current = dopo;
+      for (const c of differenze(prima, dopo)) {
+        const esito = await comando(c);
+        if (!esito.ok) {
+          // Al prossimo salvataggio si riprova tutto da dove si era.
+          salvatoRef.current = prima;
+          console.error('[salvataggio]', c.tipo, esito.errore);
+          return;
+        }
+      }
+    });
+    return codaSalvataggi.current;
+  }, []);
+
   useEffect(() => {
     if (!pronto) return;
     if (salvaTimer.current) clearTimeout(salvaTimer.current);
-    salvaTimer.current = setTimeout(() => void window.jarai.dati.salva(daSalvareRef.current), 500);
+    salvaTimer.current = setTimeout(() => void salva(), 500);
     return () => {
       if (salvaTimer.current) clearTimeout(salvaTimer.current);
     };
-  }, [pronto, pratiche, documenti, studio, studioDigitale, ideeSito, preferenzeSito]);
+  }, [pronto, salva, pratiche, documenti, studio, studioDigitale, ideeSito, preferenzeSito]);
 
-  // Prima di mandare una domanda: l'host legge pratica e documenti dal file
-  // (fino al passo 5), che deve essere già aggiornato.
+  // Prima di mandare una domanda: l'host deve già conoscere pratica e
+  // documenti appena aggiunti.
   const salvaOra = useCallback(async () => {
     if (!pronto) return;
     if (salvaTimer.current) clearTimeout(salvaTimer.current);
-    await window.jarai.dati.salva(daSalvareRef.current);
-  }, [pronto]);
+    await salva();
+  }, [pronto, salva]);
 
   const activeConversazione = conversazioni.find((c) => c.id === activeConversazioneId) ?? null;
 

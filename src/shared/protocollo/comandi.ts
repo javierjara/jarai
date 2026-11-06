@@ -1,5 +1,15 @@
 import { z } from 'zod';
-import { modalitaSchema, proceduraSchema, qualitaSchema } from './modelli';
+import {
+  datiConversazioneSitoSchema,
+  documentoSchema,
+  ideaSchema,
+  modalitaSchema,
+  praticaSchema,
+  preferenzeSitoSchema,
+  proceduraSchema,
+  qualitaSchema,
+  studioSchema,
+} from './modelli';
 
 // Comandi dai client all'host (docs/eventstore-protocollo.md §5). Ogni
 // comando porta un comandoId generato dal client: se la connessione cade e
@@ -44,6 +54,17 @@ export const comandoSchema = z.discriminatedUnion('tipo', [
       nota: z.string().optional(),
     }),
   ),
+
+  // Entità (passo 5). "salva" sostituisce l'oggetto intero: è il client a
+  // calcolare cosa è cambiato.
+  comando('pratica.salva', z.object({ pratica: praticaSchema })),
+  comando('pratica.elimina', z.object({ praticaId: z.string() })),
+  comando('documenti.salva', z.object({ praticaId: z.string(), documenti: z.array(documentoSchema) })),
+  comando('studio.salva', z.object({ studio: studioSchema })),
+  comando('preferenzeSito.salva', z.object({ preferenze: preferenzeSitoSchema })),
+  comando('idee.salva', z.object({ idee: z.array(ideaSchema) })),
+  comando('conversazioneSito.salva', z.object({ dati: datiConversazioneSitoSchema })),
+  comando('conversazioneSito.elimina', z.object({ conversazioneId: z.string() })),
 ]);
 
 export type Comando = z.infer<typeof comandoSchema>;

@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
+import type { SnapshotEntita } from '../../shared/entita';
 import type { Comando, EsitoComando, Evento, Richiesta } from '../../shared/protocollo';
 import {
   ELENCO_VUOTO,
@@ -42,6 +43,15 @@ async function richiesta<T>(r: Richiesta): Promise<T> {
   const esito = await inviaBusta({ tipo: 'richiesta', richiesta: r });
   if (!esito.ok || !('dati' in esito)) throw new Error(esito.ok ? MESSAGGIO_GENERICO : esito.errore);
   return esito.dati as T;
+}
+
+/** Pratiche, documenti, impostazioni e articoli; null se l'host non li ha ancora (si resta sul JSON). */
+export async function caricaEntita(): Promise<SnapshotEntita | null> {
+  try {
+    return (await richiesta<{ entita: SnapshotEntita | null }>({ tipo: 'snapshot.entita' })).entita;
+  } catch {
+    return null;
+  }
 }
 
 class ClienteHost {
