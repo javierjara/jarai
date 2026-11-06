@@ -1,7 +1,7 @@
 import { app, ipcMain, type BrowserWindow } from 'electron';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { apriDatabase } from '../core/db';
+import { apriDatabase, type Database } from '../core/db';
 import { Host, type EventoMotore, type Motore } from '../core/host';
 import { avviaTrasportoWs } from '../core/trasportoWs';
 import { randomBytes } from 'node:crypto';
@@ -24,6 +24,7 @@ const RINOMINATO_PATH = () => join(app.getPath('userData'), `jarai-dati.migrato-
 
 export interface HostDesktop {
   host: Host;
+  db: Database;
   conversazioniNelDatabase: () => boolean;
 }
 
@@ -97,7 +98,7 @@ export async function avviaHost(getWindow: () => BrowserWindow | null): Promise<
 
   if (!app.isPackaged && process.env['JARAI_REMOTO_PROVA'] === '1') await avviaClienteDiProva(host);
 
-  return { host, conversazioniNelDatabase: () => migrate };
+  return { host, db, conversazioniNelDatabase: () => migrate };
 }
 
 // L'agente di sempre (agentRunner) visto dall'host. I documenti arrivano da

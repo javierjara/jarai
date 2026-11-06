@@ -1,4 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
+
+// Stessa forma di StatoTelefono in src/main/telefono.ts.
+interface StatoTelefono {
+  disponibile: boolean;
+  stato: 'collegamento' | 'collegato' | 'scollegato' | 'sostituito' | 'rifiutato' | 'fermo';
+  dispositivi: Array<{ id: string; nome: string; collegatoIl: string; revocatoIl: string | null }>;
+}
 // Solo tipi: niente codice di src/shared nel preload (resta minimo).
 import type { Busta, Evento } from '../shared/protocollo';
 
@@ -308,6 +315,19 @@ const jarai = {
       const listener = (_event: Electron.IpcRendererEvent, evento: Evento) => callback(evento);
       ipcRenderer.on('jarai:evento', listener);
       return () => ipcRenderer.removeListener('jarai:evento', listener);
+    },
+  },
+
+  // "Sul telefono" (src/main/telefono.ts).
+  telefono: {
+    stato: (): Promise<StatoTelefono> => ipcRenderer.invoke('telefono:stato'),
+    invito: (): Promise<{ ok: true; immagine: string; scade: number } | { ok: false; errore: string }> =>
+      ipcRenderer.invoke('telefono:invito'),
+    revoca: (id: string): Promise<void> => ipcRenderer.invoke('telefono:revoca', id),
+    onCambio: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('telefono:cambio', listener);
+      return () => ipcRenderer.removeListener('telefono:cambio', listener);
     },
   },
 

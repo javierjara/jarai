@@ -6,6 +6,7 @@ import { registraAnteprimaDocumenti } from './documentPreview';
 import { registraCollegamentoClaude } from './claudeIpc';
 import { registraPersistenza } from './store';
 import { avviaHost } from './hostDesktop';
+import { registraTelefono } from './telefono';
 import { registraBozze } from './bozze';
 import { registraTrascrizione } from './trascrizione';
 import { registraAudioSetup } from './audioSetup';
@@ -162,8 +163,9 @@ app.whenReady().then(async () => {
   registraCollegamentoClaude(() => mainWindow);
   // Prima della finestra: jarai.db, migrazione e canale jarai:busta devono
   // esistere quando il renderer chiede il primo snapshot.
-  const { conversazioniNelDatabase } = await avviaHost(() => mainWindow);
+  const { host, db, conversazioniNelDatabase } = await avviaHost(() => mainWindow);
   registraPersistenza(conversazioniNelDatabase);
+  registraTelefono(db, host, () => mainWindow);
   registraBozze(() => mainWindow);
   registraTrascrizione(() => mainWindow);
   registraAudioSetup(() => mainWindow);
