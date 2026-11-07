@@ -256,3 +256,48 @@ describe('telefono → server privato, da capo a fondo', () => {
     expect((await fetch(`${accesso.url}/telefono/file/${k}`, { headers: { authorization: `Bearer ${accesso.token}` } })).status).toBe(401);
   });
 });
+
+describe('pacchetto e testi per l\'assistente di riserva', () => {
+  it('i testi già estratti vanno accanto ai file; il pacchetto arriva cifrato', async () => {
+    const { apriDatabase } = await import('../db');
+    const { migraResto } = await import('../migrazioneJson');
+    const { cifraTutto } = await import('../cifraturaArchivio');
+    const { costruisciPacchetto, testiDaSincronizzare } = await import('../sincronizzazione');
+    const { chiaveTesto, decifraArchivio } = await import('../../shared/archivio');
+    const { server, archivio } = await prepara();
+    const base = `http://127.0.0.1:${(aperti.at(-1)!.address() as AddressInfo).port}`;
+
+    const studio = mkdtempSync(join(tmpdir(), 'jarai-studio-'));
+    const pdf = join(studio, 'Contratto.pdf');
+    writeFileSync(pdf, '%PDF');
+    const indice = join(studio, 'indice.json');
+    writeFileSync(indice, JSON.stringify({ testo: '[Pagina 1]\nArt. 1 - Oggetto', indicizzatoIl: 'ieri' }));
+    const db = apriDatabase(':memory:');
+    migraResto(db, {
+      pratiche: [{ id: 'p1', nome: 'Rossi c. Bianchi', cliente: 'Mario Rossi', ambito: 'Civile', documenti: 2, aggiornataIl: 'oggi', cartellaPercorso: studio }],
+      documenti: {
+        p1: [
+          { id: 'd1', nome: 'Contratto', tipo: 'Contratto', data: '2026-03-03', cartella: 'Contratti', percorso: pdf },
+          { id: 'd2', nome: 'Non ancora letto', tipo: 'Altro', data: '2026-03-04', cartella: 'Altro', percorso: join(studio, 'x.pdf') },
+        ],
+      },
+    } as never);
+
+    const testi = await testiDaSincronizzare(db, async (p) => (p === pdf ? indice : null));
+    expect(testi).toEqual([{ chiave: chiaveTesto('p1', 'd1'), percorso: indice }]);
+
+    const p = costruisciPacchetto(db, { memorie: { p1: { fatti: {}, schede: {} } }, dejure: { utente: 'avv', password: 'segreta' }, ora: 'adesso' });
+    expect(p.pratiche.map((x) => x.nome)).toEqual(['Rossi c. Bianchi']);
+    expect(p.documenti.p1.map((d) => d.id)).toEqual(['d1', 'd2']);
+    await new ClienteArchivio(base, LICENZA).caricaPacchetto(await cifraTutto(CHIAVE, Buffer.from(JSON.stringify(p))));
+    const sulServer = readFileSync(archivio.percorsoPacchetto());
+    expect(sulServer.includes(Buffer.from('segreta'))).toBe(false);
+    expect(sulServer.includes(Buffer.from('Rossi'))).toBe(false);
+    expect(JSON.parse(Buffer.from(decifraArchivio(CHIAVE, sulServer)).toString()).dejure.password).toBe('segreta');
+    expect(existsSync(join(server, 'pacchetto.jra'))).toBe(true);
+
+    // Un pacchetto in chiaro viene rifiutato.
+    const r = await fetch(`${base}/sync/pacchetto`, { method: 'PUT', headers: { authorization: `Bearer ${LICENZA}` }, body: JSON.stringify(p) });
+    expect(r.status).toBe(400);
+  });
+});

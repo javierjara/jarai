@@ -17,13 +17,60 @@ import type { ElencoRemoto, StatoSincronizzazione } from '../shared/serverPrivat
 // La chiave di un file sul server (impronta degli id + estensione) è la stessa
 // sul desktop, sul server e sul telefono: src/shared/archivio.ts.
 export { chiaveFile, FORMATO_CHIAVE } from '../shared/archivio';
-import { chiaveFile } from '../shared/archivio';
+import { chiaveFile, chiaveTesto, type PacchettoStudio } from '../shared/archivio';
+import { leggiEntita } from './entita';
 
 export type { ElencoRemoto, FileRemoto, StatoSincronizzazione } from '../shared/serverPrivato';
 
 interface FileLocale {
   chiave: string;
   percorso: string;
+}
+
+/**
+ * I testi già estratti dal computer (indice dei testi), accanto ai file:
+ * l'assistente di riserva sul server li legge senza rifare OCR e conversioni.
+ * percorsoTesto dà il file dell'indice per un documento, null se non ancora letto.
+ */
+export async function testiDaSincronizzare(
+  db: Database,
+  percorsoTesto: (percorsoFile: string, nome: string) => Promise<string | null>,
+): Promise<FileLocale[]> {
+  const righe = db
+    .prepare(
+      `SELECT d.pratica_id AS praticaId, d.id AS documentoId, d.percorso AS percorso, d.nome AS nome
+       FROM documento d JOIN pratica p ON p.id = d.pratica_id
+       WHERE p.eliminata_il IS NULL AND d.percorso IS NOT NULL AND d.percorso <> ''`,
+    )
+    .all() as Array<{ praticaId: string; documentoId: string; percorso: string; nome: string }>;
+  const file: FileLocale[] = [];
+  for (const r of righe) {
+    const testo = await percorsoTesto(r.percorso, r.nome).catch(() => null);
+    if (testo) file.push({ chiave: chiaveTesto(r.praticaId, r.documentoId), percorso: testo });
+  }
+  return file;
+}
+
+/** Il pacchetto dello studio per il server privato (src/shared/archivio.ts). */
+export function costruisciPacchetto(
+  db: Database,
+  extra: { memorie: Record<string, unknown>; dejure: PacchettoStudio['dejure']; ora: string },
+): PacchettoStudio {
+  const e = leggiEntita(db, () => null);
+  return {
+    v: 1,
+    creatoIl: extra.ora,
+    studio: e?.studio ?? null,
+    pratiche: (e?.pratiche ?? []).map(({ id, nome, cliente, controparte, ambito, note }) => ({ id, nome, cliente, controparte, ambito, note })),
+    documenti: Object.fromEntries(
+      Object.entries(e?.documenti ?? {}).map(([pid, docs]) => [
+        pid,
+        docs.map(({ id, nome, tipo, cartella, pagine, data, percorso }) => ({ id, nome, tipo, cartella, pagine, data, percorso })),
+      ]),
+    ),
+    memorie: extra.memorie,
+    dejure: extra.dejure,
+  };
 }
 
 /** I file da tenere sul server: i documenti con un file, delle pratiche non eliminate. */
@@ -111,6 +158,15 @@ export class ClienteArchivio {
     });
   }
 
+  /** Il pacchetto dello studio (elenco, memorie…), già cifrato con la chiave dello studio. */
+  async caricaPacchetto(cifrato: Uint8Array): Promise<void> {
+    await this.chiama('/sync/pacchetto', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: cifrato as unknown as BodyInit,
+    });
+  }
+
   async elimina(chiave: string): Promise<void> {
     await this.chiama(`/sync/file/${chiave}`, { method: 'DELETE' });
   }
@@ -138,7 +194,7 @@ interface OpzioniSincronizzatore {
   cliente: ClienteArchivio;
   /** Chiave dello studio (32 byte): resta su questo computer. */
   chiave: Uint8Array;
-  locali: () => FileLocale[];
+  locali: () => FileLocale[] | Promise<FileLocale[]>;
   onStato: (stato: StatoSincronizzazione) => void;
   orologio?: () => string;
   registraErrore?: (contesto: string, dettaglio: string) => void;
@@ -190,7 +246,7 @@ export class Sincronizzatore {
     try {
       remoto = await this.o.cliente.elenco();
       const remoti = new Map(remoto.file.map((f) => [f.chiave, f]));
-      const locali = this.o.locali();
+      const locali = await this.o.locali();
 
       // Cosa cambia: impronte dei file locali (solo dei modificati).
       let mancanti = 0;

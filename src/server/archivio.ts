@@ -21,6 +21,9 @@ import { FORMATO_CHIAVE, type ElencoRemoto } from '../core/sincronizzazione';
 //   PUT    /sync/telefoni/<id>     { impronta }      (licenza)
 //   POST   /sync/telefoni/attivi   { id: [...] }     (licenza) gli altri si tolgono
 //   GET    /telefono/file/<chiave>                   (Bearer <id>.<token>)
+// Il "pacchetto" dello studio (elenco delle pratiche, memorie, credenziali
+// DeJure: src/shared/archivio.ts), cifrato come i file, arriva con
+//   PUT    /sync/pacchetto                           (licenza)
 
 export const MAX_FILE = 2 * 1024 ** 3;
 
@@ -33,6 +36,8 @@ export interface OpzioniArchivio {
   orologio?: () => string;
   /** Dopo ogni file caricato o tolto (per riferire lo stato al CRM). */
   onCambio?: () => void;
+  /** Arrivato un pacchetto nuovo dal desktop. */
+  onPacchetto?: () => void;
 }
 
 export function preparaDb(db: DatabaseSync): void {
@@ -100,6 +105,40 @@ export class Archivio {
     return join(this.o.cartella, chiave);
   }
 
+  /** Dove sta il pacchetto dello studio (cifrato). */
+  percorsoPacchetto(): string {
+    return join(this.o.cartella, 'pacchetto.jra');
+  }
+
+  /** Riceve un contenuto cifrato (JRA1) e lo scrive per intero o per niente. */
+  private async ricevi(req: IncomingMessage, res: ServerResponse, finale: string, massimo: number): Promise<void> {
+    const temporaneo = `${finale}.${randomBytes(6).toString('hex')}.parziale`;
+    let ricevuti = 0;
+    let inizio = Buffer.alloc(0);
+    const controlla = new Transform({
+      transform(pezzo: Buffer, _enc, cb) {
+        if (inizio.length < 4) {
+          inizio = Buffer.concat([inizio, pezzo]).subarray(0, 4);
+          if (inizio.length === 4 && inizio.toString('latin1') !== 'JRA1') return cb(new Error('non cifrato'));
+        }
+        ricevuti += pezzo.length;
+        if (ricevuti > massimo) return cb(new Error('troppo grande'));
+        cb(null, pezzo);
+      },
+    });
+    try {
+      await mkdir(dirname(finale), { recursive: true, mode: 0o700 });
+      await pipeline(req, controlla, createWriteStream(temporaneo, { mode: 0o600 }));
+      if (inizio.toString('latin1') !== 'JRA1') throw new Error('non cifrato');
+      await rename(temporaneo, finale);
+      this.o.onPacchetto?.();
+      rispondi(res, 200, { ok: true });
+    } catch {
+      await rm(temporaneo, { force: true });
+      if (!res.headersSent) rispondi(res, 400, { errore: 'Contenuto non valido.' });
+    }
+  }
+
   /** Il telefono di questo token, se registrato dal desktop. */
   private telefono(req: IncomingMessage): string | null {
     const m = /^Bearer ([A-Za-z0-9_-]{16,64})\.([A-Za-z0-9_-]{32,128})$/.exec(req.headers.authorization ?? '');
@@ -125,6 +164,10 @@ export class Archivio {
     }
     if (url.pathname === '/sync/elenco' && req.method === 'GET') {
       rispondi(res, 200, await this.elenco());
+      return true;
+    }
+    if (url.pathname === '/sync/pacchetto' && req.method === 'PUT') {
+      await this.ricevi(req, res, this.percorsoPacchetto(), 50 * 1024 ** 2);
       return true;
     }
     if (url.pathname.startsWith('/sync/telefoni/')) {

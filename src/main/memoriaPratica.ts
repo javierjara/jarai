@@ -10,7 +10,9 @@ import { join } from 'node:path';
 // - schede: per ogni documento letto integralmente, una sintesi con le
 //   pagine. Una nuova conversazione parte dalle schede invece di rileggere
 //   tutta la pratica; la scheda vale finché il file non cambia (impronta).
-// Resta sul computer, come l'indice dei testi: non va da nessuna parte.
+// Resta sul computer, come l'indice dei testi. Con il server privato ne va
+// una copia cifrata con la chiave dello studio (pacchetto), per l'assistente
+// di riserva: il server la legge solo in memoria, quando un dispositivo gli dà la chiave.
 // File JSON in attesa di SQLite (Fase 5), come store.ts.
 
 const CARTELLA_MEMORIA = () => join(app.getPath('userData'), 'memoria-pratiche');

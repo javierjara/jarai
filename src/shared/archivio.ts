@@ -36,6 +36,29 @@ export function estensione(percorso: string): string {
   return nome.slice(i).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 8);
 }
 
+/** Il testo già estratto dal computer (PDF, OCR, Word…), per l'assistente sul server. */
+export function chiaveTesto(praticaId: string, documentoId: string): string {
+  return chiaveFile(praticaId, `${documentoId}#testo`, 'testo.json');
+}
+
+/**
+ * Il "pacchetto" dello studio sul server privato: quello che serve
+ * all'assistente di riserva per lavorare a computer spento. Cifrato con la
+ * chiave dello studio come i file (il server lo legge solo quando un
+ * dispositivo gli dà la chiave, e solo in memoria).
+ */
+export interface PacchettoStudio {
+  v: 1;
+  creatoIl: string;
+  studio: { nome: string; avvocato: string } | null;
+  pratiche: Array<{ id: string; nome: string; cliente: string; controparte?: string; ambito: string; note?: string }>;
+  documenti: Record<string, Array<{ id: string; nome: string; tipo: string; cartella: string; pagine?: number; data: string; percorso?: string }>>;
+  /** Memoria della pratica (fatti e schede dei documenti), per id della pratica. */
+  memorie: Record<string, unknown>;
+  /** Credenziali DeJure dell'avvocato, se ha collegato DeJure. */
+  dejure: { utente: string; password: string } | null;
+}
+
 export const FORMATO_CHIAVE = /^[0-9a-f]{24}\/[0-9a-f]{24}(\.[a-z0-9]{1,7})?$/;
 
 const MIME: Record<string, string> = {

@@ -6,7 +6,12 @@ import { dispositivoAttivo, elencaDispositivi } from '../core/dispositivi';
 import { join } from 'node:path';
 import type { Database } from '../core/db';
 import type { Host } from '../core/host';
-import { ClienteArchivio, fileDaSincronizzare, Sincronizzatore, type StatoSincronizzazione } from '../core/sincronizzazione';
+import { createHash } from 'node:crypto';
+import { cifraTutto } from '../core/cifraturaArchivio';
+import { ClienteArchivio, costruisciPacchetto, fileDaSincronizzare, Sincronizzatore, testiDaSincronizzare, type StatoSincronizzazione } from '../core/sincronizzazione';
+import { credenzialiDejurePerServer } from './dejure';
+import { percorsoTestoIndicizzato } from './indice';
+import { leggiMemoria } from './memoriaPratica';
 import { registraErroreGrezzo } from './logger';
 import { funzioneAttiva, leggiLicenza, statoLicenza } from './licenza';
 import { cifraturaDisponibile, leggiCifrato, scriviCifrato } from './segreti';
@@ -87,7 +92,8 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
     sinc = new Sincronizzatore({
       cliente,
       chiave,
-      locali: () => fileDaSincronizzare(db),
+      // I file e, accanto, i testi già estratti (per l'assistente di riserva sul server).
+      locali: async () => [...fileDaSincronizzare(db), ...(await testiDaSincronizzare(db, (p) => percorsoTestoIndicizzato(p)))],
       onStato: notifica,
       registraErrore: (contesto, dettaglio) => void registraErroreGrezzo(`server ${contesto}`, dettaglio),
     });
@@ -95,9 +101,25 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
     void sinc.sincronizza();
   };
 
+  // Il pacchetto si ricarica solo se cambia (impronta del contenuto in chiaro).
+  let ultimoPacchetto: string | null = null;
+  const caricaPacchetto = async () => {
+    if (!cliente || !chiave) return;
+    const pratiche = (db.prepare('SELECT id FROM pratica WHERE eliminata_il IS NULL').all() as Array<{ id: string }>).map((r) => r.id);
+    const memorie: Record<string, unknown> = {};
+    for (const id of pratiche) memorie[id] = await leggiMemoria(id).catch(() => null);
+    const p = costruisciPacchetto(db, { memorie, dejure: await credenzialiDejurePerServer().catch(() => null), ora: '' });
+    const testo = JSON.stringify(p);
+    const impronta = createHash('sha256').update(testo).digest('hex');
+    if (impronta === ultimoPacchetto) return;
+    await cliente.caricaPacchetto(await cifraTutto(chiave, Buffer.from(JSON.stringify({ ...p, creatoIl: new Date().toISOString() }))));
+    ultimoPacchetto = impronta;
+  };
+
   const giro = async () => {
     await configura();
     if (sinc) await sinc.sincronizza();
+    await caricaPacchetto().catch((err) => void registraErroreGrezzo('server pacchetto', err instanceof Error ? err.message : String(err)));
     // Telefoni scollegati mentre il server non rispondeva: il server li toglie ora.
     if (cliente) {
       const attivi = elencaDispositivi(db).filter((d) => !d.revocatoIl).map((d) => d.id);

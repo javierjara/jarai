@@ -128,3 +128,16 @@ export function decifra(chiave: Uint8Array): Transform {
     },
   });
 }
+
+/** Cifra un contenuto già in memoria (es. il pacchetto dello studio). */
+export async function cifraTutto(chiave: Uint8Array, dati: Uint8Array): Promise<Buffer> {
+  const pezzi: Buffer[] = [];
+  const t = cifra(chiave);
+  t.on('data', (p: Buffer) => pezzi.push(p));
+  await new Promise<void>((risolvi, rifiuta) => {
+    t.on('end', risolvi);
+    t.on('error', rifiuta);
+    t.end(Buffer.from(dati));
+  });
+  return Buffer.concat(pezzi);
+}

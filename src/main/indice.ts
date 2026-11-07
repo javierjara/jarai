@@ -106,6 +106,17 @@ export async function testoDocumento(
   }
 }
 
+/** Il file dell'indice con il testo di un documento, se già estratto (per il server privato). */
+export async function percorsoTestoIndicizzato(percorso: string): Promise<string | null> {
+  try {
+    const file = join(CARTELLA_INDICE(), `${await chiavePer(percorso)}.json`);
+    await fs.access(file);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
 // Testo già indicizzato, senza mai avviare un'estrazione: serve a
 // elenca_documenti per dire quante parti ha un documento senza bloccarsi.
 export async function testoSeIndicizzato(doc: DocumentoRif & { percorso: string }): Promise<string | null> {

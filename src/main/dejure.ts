@@ -69,6 +69,11 @@ async function leggiStatoSalvato(): Promise<StatoSalvato | null> {
   }
 }
 
+/** Per l'assistente di riserva sul server privato: credenziali solo se DeJure è collegato. */
+export async function credenzialiDejurePerServer(): Promise<Credenziali | null> {
+  return (await dejureAttiva()) ? leggiCredenziali() : null;
+}
+
 export async function statoDejure(): Promise<StatoDejure> {
   const [stato, cred] = await Promise.all([leggiStatoSalvato(), leggiCredenziali()]);
   if (!stato || !cred) return { attiva: false };
