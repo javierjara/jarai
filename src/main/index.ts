@@ -166,8 +166,10 @@ app.whenReady().then(async () => {
   // esistere quando il renderer chiede il primo snapshot.
   const { host, db, conversazioniNelDatabase } = await avviaHost(() => mainWindow);
   registraPersistenza(conversazioniNelDatabase);
-  registraTelefono(db, host, () => mainWindow);
-  registraServerPrivato(db, host, () => mainWindow);
+  // Il server privato prima del telefono: il telefono ne usa l'accesso ai file.
+  const serverPrivato = registraServerPrivato(db, host, () => mainWindow);
+  host.impostaAccessoServer(serverPrivato.accessoTelefono);
+  registraTelefono(db, host, () => mainWindow, { onRevoca: serverPrivato.revocaTelefono });
   registraBozze(() => mainWindow);
   registraTrascrizione(() => mainWindow);
   registraAudioSetup(() => mainWindow);

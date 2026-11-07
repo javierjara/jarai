@@ -1,7 +1,9 @@
 import { open, type FileHandle } from 'node:fs/promises';
-import { basename, extname } from 'node:path';
+import { basename } from 'node:path';
+import { mimeDi, type AccessoServer } from '../shared/archivio';
 import {
   bustaSchema,
+  DISPOSITIVO_LOCALE,
   VERSIONE_PROTOCOLLO,
   type Articolo,
   type Busta,
@@ -47,28 +49,6 @@ import { MIGRAZIONE_RESTO, migrazioneFatta } from './migrazioneJson';
  */
 export const PEZZO_DOCUMENTO = 384 * 1024;
 
-const MIME: Record<string, string> = {
-  '.pdf': 'application/pdf',
-  '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.xls': 'application/vnd.ms-excel',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.txt': 'text/plain',
-  '.rtf': 'application/rtf',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.heic': 'image/heic',
-  '.eml': 'message/rfc822',
-  '.msg': 'application/vnd.ms-outlook',
-  '.p7m': 'application/pkcs7-mime',
-  '.mp3': 'audio/mpeg',
-  '.m4a': 'audio/mp4',
-};
-
-function mimeDi(percorso: string): string {
-  return MIME[extname(percorso).toLowerCase()] ?? 'application/octet-stream';
-}
 
 // Host (docs/eventstore-protocollo.md §2): l'unico che scrive lo stato delle
 // conversazioni. Riceve comandi da qualsiasi client (finestra Electron oggi,
@@ -159,6 +139,7 @@ export class Host {
   private readonly nuovoId: () => string;
   private readonly registraErrore: (contesto: string, dettaglio: string) => void;
   private readonly esportaBozza: OpzioniHost['esportaBozza'];
+  private fornitoreAccesso: ((dispositivoId: string) => Promise<AccessoServer | null>) | null = null;
   private readonly risolviPercorso: NonNullable<OpzioniHost['risolviPercorso']>;
   private elenco: ProiezioneElenco = ELENCO_VUOTO;
   private readonly cache = new Map<string, ProiezioneConversazione>();
@@ -202,6 +183,9 @@ export class Host {
     if (busta.tipo === 'richiesta' && busta.richiesta.tipo === 'bozza.esporta') {
       return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: await this.esporta(busta.richiesta) };
     }
+    if (busta.tipo === 'richiesta' && busta.richiesta.tipo === 'server.accesso') {
+      return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: await this.accessoServer(origine) };
+    }
     if (busta.tipo === 'richiesta' && busta.richiesta.tipo === 'documento.leggi') {
       return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: await this.leggiDocumento(busta.richiesta) };
     }
@@ -237,6 +221,27 @@ export class Host {
       case 'bozza.esporta':
       case 'documento.leggi':
         return {}; // asincrone: le gestiscono esporta() e leggiDocumento()
+    }
+  }
+
+  /**
+   * Chi dà l'accesso ai file del server privato (src/main/serverPrivato.ts).
+   * Si imposta dopo la creazione: il server privato parte dopo l'host.
+   */
+  impostaAccessoServer(fn: ((dispositivoId: string) => Promise<AccessoServer | null>) | null): void {
+    this.fornitoreAccesso = fn;
+  }
+
+  private async accessoServer(origine: Origine): Promise<EsitoComando | { ok: true; dati: { accesso: AccessoServer | null } }> {
+    const id = origine.dispositivoId;
+    // Solo per i telefoni collegati: la finestra di questo computer non ne ha bisogno.
+    if (!id || id === DISPOSITIVO_LOCALE) return { ok: false, errore: 'Richiesta non valida.' };
+    if (!this.fornitoreAccesso) return { ok: true, dati: { accesso: null } };
+    try {
+      return { ok: true, dati: { accesso: await this.fornitoreAccesso(id) } };
+    } catch (err) {
+      this.registraErrore('accesso server', err instanceof Error ? err.message : String(err));
+      return { ok: false, errore: 'Il server privato non risponde: riprovo più tardi.' };
     }
   }
 

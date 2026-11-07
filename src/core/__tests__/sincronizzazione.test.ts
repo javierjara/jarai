@@ -173,3 +173,86 @@ describe('cifratura dei file per il server', () => {
     await expect(passa(decifra, c, randomBytes(32))).rejects.toThrow();
   });
 });
+
+describe('telefoni sul server privato', () => {
+  const TEL = 'telefono_di_giulia_123';
+  const TOKEN = 'T'.repeat(43);
+
+  it('un telefono registrato scarica i file cifrati, e solo quelli; revocato non più', async () => {
+    const { aggiungi, sync } = await prepara();
+    const { chiave } = aggiungi('p1', 'd1', 'Contratto.pdf', 'contenuto riservato');
+    await sync().sincronizza();
+    const url = aperti.at(-1)!.address() as AddressInfo;
+    const base = `http://127.0.0.1:${url.port}`;
+    const cliente = new ClienteArchivio(base, LICENZA);
+    const scarica = (k: string, token = `${TEL}.${TOKEN}`) => fetch(`${base}/telefono/file/${k}`, { headers: { authorization: `Bearer ${token}` } });
+
+    expect((await scarica(chiave)).status).toBe(401); // non ancora registrato
+    await cliente.registraTelefono(TEL, TOKEN);
+    const r = await scarica(chiave);
+    expect(r.status).toBe(200);
+    const cifrato = Buffer.from(await r.arrayBuffer());
+    expect(cifrato.subarray(0, 4).toString()).toBe('JRA1');
+    expect((await passa(decifra, cifrato)).toString()).toBe('contenuto riservato');
+
+    expect((await scarica(chiave, `${TEL}.${'X'.repeat(43)}`)).status).toBe(401);
+    expect((await scarica('a'.repeat(24) + '/' + 'b'.repeat(24) + '.pdf')).status).toBe(404);
+    // Il token del telefono non apre le operazioni del desktop.
+    expect((await fetch(`${base}/sync/elenco`, { headers: { authorization: `Bearer ${TEL}.${TOKEN}` } })).status).toBe(401);
+    expect((await fetch(`${base}/telefono/file/${chiave}`, { method: 'DELETE', headers: { authorization: `Bearer ${TEL}.${TOKEN}` } })).status).toBe(405);
+
+    await cliente.revocaTelefono(TEL);
+    expect((await scarica(chiave)).status).toBe(401);
+  });
+
+  it('telefoniAttivi toglie i telefoni revocati mentre il server non rispondeva', async () => {
+    const { aggiungi, sync } = await prepara();
+    const { chiave } = aggiungi('p1', 'd1', 'a.pdf', 'x');
+    await sync().sincronizza();
+    const base = `http://127.0.0.1:${(aperti.at(-1)!.address() as AddressInfo).port}`;
+    const cliente = new ClienteArchivio(base, LICENZA);
+    await cliente.registraTelefono(TEL, TOKEN);
+    await cliente.registraTelefono('altro_telefono_45678', TOKEN);
+    await cliente.telefoniAttivi(['altro_telefono_45678']);
+    const stato = (id: string) => fetch(`${base}/telefono/file/${chiave}`, { headers: { authorization: `Bearer ${id}.${TOKEN}` } }).then((r) => r.status);
+    expect(await stato(TEL)).toBe(401);
+    expect(await stato('altro_telefono_45678')).toBe(200);
+  });
+});
+
+describe('telefono → server privato, da capo a fondo', () => {
+  it('il computer dà l\'accesso al telefono collegato, che scarica e decifra da solo', async () => {
+    const { aggiungi, sync } = await prepara();
+    aggiungi('pratica-1', 'doc-1', 'Contratto.pdf', '%PDF-1.7 contratto riservato');
+    await sync().sincronizza();
+    const base = `http://127.0.0.1:${(aperti.at(-1)!.address() as AddressInfo).port}`;
+
+    // Lato computer: come src/main/serverPrivato.ts accessoTelefono.
+    const { Host } = await import('../host');
+    const { apriDatabase } = await import('../db');
+    const { MotoreFinto } = await import('./motoreFinto');
+    const { casuale } = await import('../../shared/cifratura');
+    const host = new Host(apriDatabase(':memory:'), new MotoreFinto());
+    const archivio = new ClienteArchivio(base, LICENZA);
+    host.impostaAccessoServer(async (id) => {
+      const token = casuale(32);
+      await archivio.registraTelefono(id, token);
+      return { url: base, token: `${id}.${token}`, chiave: CHIAVE.toString('base64') };
+    });
+
+    // Lato telefono: come jarai-app/src/server.ts.
+    const TEL = 'abcdefghijklmnopqrstuv';
+    const r = await host.gestisciBusta({ v: 1, tipo: 'richiesta', id: 'x', richiesta: { tipo: 'server.accesso' } }, { dispositivoId: TEL });
+    const accesso = (r as { esito: { dati: { accesso: { url: string; token: string; chiave: string } } } }).esito.dati.accesso;
+    const { chiaveFile: chiaveCondivisa, decifraArchivio } = await import('../../shared/archivio');
+    const k = chiaveCondivisa('pratica-1', 'doc-1', '/qualsiasi/cartella/Contratto.pdf');
+    const risposta = await fetch(`${accesso.url}/telefono/file/${k}`, { headers: { authorization: `Bearer ${accesso.token}` } });
+    expect(risposta.status).toBe(200);
+    const chiaro = decifraArchivio(Buffer.from(accesso.chiave, 'base64'), new Uint8Array(await risposta.arrayBuffer()));
+    expect(Buffer.from(chiaro).toString()).toBe('%PDF-1.7 contratto riservato');
+
+    // Una nuova richiesta rinnova il token: quello vecchio non vale più.
+    await host.gestisciBusta({ v: 1, tipo: 'richiesta', id: 'y', richiesta: { tipo: 'server.accesso' } }, { dispositivoId: TEL });
+    expect((await fetch(`${accesso.url}/telefono/file/${k}`, { headers: { authorization: `Bearer ${accesso.token}` } })).status).toBe(401);
+  });
+});

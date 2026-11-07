@@ -461,3 +461,29 @@ describe('snapshot.entita: numero di documenti', () => {
     ]);
   });
 });
+
+describe('server.accesso (file del server privato per il telefono)', () => {
+  const richiesta = { v: 1, tipo: 'richiesta', id: 'a1', richiesta: { tipo: 'server.accesso' } };
+
+  it('lo dà ai telefoni, con il loro id; mai alla finestra locale', async () => {
+    const host = new Host(apriDatabase(':memory:'), new MotoreFinto());
+    expect(await host.gestisciBusta(richiesta, { dispositivoId: 'tel-1' })).toMatchObject({ esito: { ok: true, dati: { accesso: null } } });
+    const chiesti: string[] = [];
+    host.impostaAccessoServer(async (id) => {
+      chiesti.push(id);
+      return { url: 'https://s', token: `${id}.tok`, chiave: 'k' };
+    });
+    expect(await host.gestisciBusta(richiesta, { dispositivoId: 'tel-1' })).toMatchObject({ esito: { ok: true, dati: { accesso: { token: 'tel-1.tok' } } } });
+    expect(await host.gestisciBusta(richiesta, { dispositivoId: 'desktop' })).toMatchObject({ esito: { ok: false } });
+    expect(await host.gestisciBusta(richiesta)).toMatchObject({ esito: { ok: false } });
+    expect(chiesti).toEqual(['tel-1']);
+  });
+
+  it('server irraggiungibile: errore leggibile', async () => {
+    const host = new Host(apriDatabase(':memory:'), new MotoreFinto());
+    host.impostaAccessoServer(async () => {
+      throw new Error('ECONNREFUSED');
+    });
+    expect(await host.gestisciBusta(richiesta, { dispositivoId: 'tel-1' })).toMatchObject({ esito: { ok: false, errore: 'Il server privato non risponde: riprovo più tardi.' } });
+  });
+});

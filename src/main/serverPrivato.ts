@@ -1,5 +1,8 @@
 import { app, ipcMain, type BrowserWindow } from 'electron';
 import { randomBytes } from 'node:crypto';
+import type { AccessoServer } from '../shared/archivio';
+import { casuale } from '../shared/cifratura';
+import { dispositivoAttivo, elencaDispositivi } from '../core/dispositivi';
 import { join } from 'node:path';
 import type { Database } from '../core/db';
 import type { Host } from '../core/host';
@@ -38,8 +41,16 @@ export interface StatoServerPrivato {
   stato: StatoSincronizzazione;
 }
 
-export function registraServerPrivato(db: Database, host: Host, getWindow: () => BrowserWindow | null): void {
+export interface ServerPrivatoPerTelefoni {
+  /** Accesso in sola lettura ai file (cifrati) per un telefono collegato; null se il server privato non c'è. */
+  accessoTelefono: (dispositivoId: string) => Promise<AccessoServer | null>;
+  revocaTelefono: (dispositivoId: string) => void;
+}
+
+export function registraServerPrivato(db: Database, host: Host, getWindow: () => BrowserWindow | null): ServerPrivatoPerTelefoni {
   let sinc: Sincronizzatore | null = null;
+  let cliente: ClienteArchivio | null = null;
+  let chiave: Uint8Array | null = null;
   let url: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   let attesa: ReturnType<typeof setTimeout> | null = null;
@@ -59,20 +70,22 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
     if (!licenza || !nuovo) {
       if (sinc) {
         sinc = null;
+        cliente = null;
         url = null;
         notifica();
       }
       return;
     }
     if (sinc && nuovo === url) return;
-    const chiave = await chiaveStudio();
+    chiave = await chiaveStudio();
     if (!chiave) {
       void registraErroreGrezzo('server chiave', 'cifratura del sistema non disponibile: sincronizzazione ferma');
       return;
     }
     url = nuovo;
+    cliente = new ClienteArchivio(nuovo, licenza);
     sinc = new Sincronizzatore({
-      cliente: new ClienteArchivio(nuovo, licenza),
+      cliente,
       chiave,
       locali: () => fileDaSincronizzare(db),
       onStato: notifica,
@@ -85,6 +98,11 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
   const giro = async () => {
     await configura();
     if (sinc) await sinc.sincronizza();
+    // Telefoni scollegati mentre il server non rispondeva: il server li toglie ora.
+    if (cliente) {
+      const attivi = elencaDispositivi(db).filter((d) => !d.revocatoIl).map((d) => d.id);
+      await cliente.telefoniAttivi(attivi).catch(() => undefined);
+    }
   };
 
   // Documenti aggiunti o tolti: si sincronizza poco dopo (più modifiche di fila = un giro).
@@ -108,9 +126,25 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
     if (attesa) clearTimeout(attesa);
   });
 
+  const accessoTelefono = async (dispositivoId: string): Promise<AccessoServer | null> => {
+    await configura();
+    if (!cliente || !url || !chiave || !dispositivoAttivo(db, dispositivoId)) return null;
+    // Un token nuovo a ogni richiesta: quello vecchio smette di valere.
+    const token = casuale(32);
+    await cliente.registraTelefono(dispositivoId, token);
+    return { url, token: `${dispositivoId}.${token}`, chiave: Buffer.from(chiave).toString('base64') };
+  };
+
+  const revocaTelefono = (dispositivoId: string) => {
+    // Se il server ora non risponde, ci pensa il prossimo giro (telefoniAttivi).
+    void cliente?.revocaTelefono(dispositivoId).catch(() => undefined);
+  };
+
   // Si parte qualche secondo dopo l'avvio, per non rallentare la finestra.
   setTimeout(() => {
     void giro().catch((err) => void registraErroreGrezzo('server avvio', err instanceof Error ? err.message : String(err)));
     timer = setInterval(() => void giro().catch(() => undefined), OGNI);
   }, 8_000);
+
+  return { accessoTelefono, revocaTelefono };
 }

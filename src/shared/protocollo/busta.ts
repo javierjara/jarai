@@ -46,6 +46,10 @@ export const richiestaSchema = z.discriminatedUnion('tipo', [
     documentoId: z.string().min(1),
     da: z.number().int().nonnegative().default(0),
   }),
+  // Il telefono chiede di leggere i file direttamente dal server privato
+  // dello studio (anche a computer spento): indirizzo, token di sola lettura
+  // e chiave per decifrarli. Risposta: { accesso: AccessoServer | null }.
+  z.object({ tipo: z.literal('server.accesso') }),
 ]);
 export type FormatoBozza = 'word' | 'pdf';
 

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { extname } from 'node:path';
 import { Readable } from 'node:stream';
 import { cifra, dimensioneCifrata, improntaOpaca } from './cifraturaArchivio';
 import type { Database } from './db';
@@ -15,14 +14,10 @@ import type { ElencoRemoto, StatoSincronizzazione } from '../shared/serverPrivat
 // pratiche (impronta degli id): la stessa funzione serve al desktop per
 // caricare e al server per ritrovare il file quando il telefono lo chiede.
 
-/** "a1b2…/c3d4….pdf": impronta di pratica e documento, più l'estensione vera. */
-export function chiaveFile(praticaId: string, documentoId: string, percorso: string): string {
-  const h = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 24);
-  const ext = extname(percorso).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 8);
-  return `${h(`pratica:${praticaId}`)}/${h(`documento:${praticaId}/${documentoId}`)}${ext}`;
-}
-
-export const FORMATO_CHIAVE = /^[0-9a-f]{24}\/[0-9a-f]{24}(\.[a-z0-9]{1,7})?$/;
+// La chiave di un file sul server (impronta degli id + estensione) è la stessa
+// sul desktop, sul server e sul telefono: src/shared/archivio.ts.
+export { chiaveFile, FORMATO_CHIAVE } from '../shared/archivio';
+import { chiaveFile } from '../shared/archivio';
 
 export type { ElencoRemoto, FileRemoto, StatoSincronizzazione } from '../shared/serverPrivato';
 
@@ -118,6 +113,24 @@ export class ClienteArchivio {
 
   async elimina(chiave: string): Promise<void> {
     await this.chiama(`/sync/file/${chiave}`, { method: 'DELETE' });
+  }
+
+  /** Un telefono collegato potrà scaricare i file (cifrati) con questo token. */
+  async registraTelefono(id: string, token: string): Promise<void> {
+    await this.chiama(`/sync/telefoni/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ impronta: createHash('sha256').update(token).digest('hex') }),
+    });
+  }
+
+  async revocaTelefono(id: string): Promise<void> {
+    await this.chiama(`/sync/telefoni/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  /** I telefoni ancora collegati: il server toglie gli altri (revoche fatte mentre era irraggiungibile). */
+  async telefoniAttivi(id: string[]): Promise<void> {
+    await this.chiama('/sync/telefoni/attivi', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) });
   }
 }
 

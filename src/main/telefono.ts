@@ -61,7 +61,12 @@ function nomeComputer(): string {
   return hostname().split('.')[0].slice(0, 60) || 'Computer';
 }
 
-export function registraTelefono(db: Database, host: Host, getWindow: () => BrowserWindow | null): void {
+export function registraTelefono(
+  db: Database,
+  host: Host,
+  getWindow: () => BrowserWindow | null,
+  opzioni: { onRevoca?: (dispositivoId: string) => void } = {},
+): void {
   let ponte: PonteRelay | null = null;
   let avvio: Promise<PonteRelay> | null = null;
 
@@ -134,6 +139,8 @@ export function registraTelefono(db: Database, host: Host, getWindow: () => Brow
     if (typeof id !== 'string') return;
     if (ponte) ponte.revoca(id);
     else (await avvia()).revoca(id);
+    // Anche l'accesso ai file del server privato.
+    opzioni.onRevoca?.(id);
     notifica();
   });
 

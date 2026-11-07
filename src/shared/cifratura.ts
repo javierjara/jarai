@@ -101,7 +101,7 @@ function daBase64url(s: string): Uint8Array {
 }
 
 // UTF-8 a mano: TextEncoder/TextDecoder non sono garantiti su ogni Hermes.
-function utf8(s: string): Uint8Array {
+export function utf8(s: string): Uint8Array {
   const out: number[] = [];
   for (const ch of s) {
     let c = ch.codePointAt(0)!;
