@@ -175,10 +175,6 @@ export default function Sidebar({
 
       <div className="sidebar-footer">
         <IndicatoreServer onApri={() => onNavigate('impostazioni')} />
-        <div className="privacy-pill-sidebar">
-          <span className="dot" />
-          Locale · cifrata · GDPR
-        </div>
       </div>
     </aside>
   );
