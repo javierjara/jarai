@@ -132,3 +132,40 @@ describe('client remoti sullo stesso host', () => {
     expect(entita.studio.nome).toBe('Studio Molfino');
   });
 });
+
+describe('stato salvato sul dispositivo (istantanea / ripristina)', () => {
+  it('si legge senza host e al collegamento recupera solo il resto', async () => {
+    const { motore, trasporto, cliente } = await prepara();
+    const primo = await cliente('token-telefono');
+    await primo.comando({
+      tipo: 'conversazione.crea',
+      argomenti: { conversazioneId: 'c1', modalita: 'pratica', praticaId: null, titolo: 'Scadenze', procedura: null, qualita: 'Standard' },
+    });
+    await primo.caricaConversazione('c1');
+    await primo.comando({ tipo: 'conversazione.invia', argomenti: { conversazioneId: 'c1', testo: 'Quali?', qualita: 'Standard' } });
+    motore.emetti('c1', { tipo: 'completato', testo: 'Tre.' });
+    await motore.finisci('c1');
+    await finche(() => primo.conversazione('c1')?.stato === 'completata');
+    const salvato = JSON.parse(JSON.stringify(primo.istantanea()));
+    primo.chiudi();
+
+    // Intanto, da un altro dispositivo, un'altra conversazione.
+    const altro = await cliente('token-portatile');
+    await altro.comando({
+      tipo: 'conversazione.crea',
+      argomenti: { conversazioneId: 'c2', modalita: 'pratica', praticaId: null, titolo: 'Nuova', procedura: null, qualita: 'Standard' },
+    });
+
+    // Il telefono riparte dalla copia: legge subito, senza host.
+    const secondo = new ClienteRemoto({ url: `ws://127.0.0.1:${trasporto.porta}/?token=token-telefono`, attesaMassimaMs: 50 });
+    aperti.push(secondo);
+    secondo.ripristina(salvato);
+    expect(secondo.connesso).toBe(false);
+    expect(secondo.conversazione('c1')!.messaggi.map((m) => m.testo)).toEqual(['Quali?', 'Tre.']);
+    expect(secondo.elenco.conversazioni.c2).toBeUndefined();
+
+    await secondo.connetti();
+    expect(secondo.elenco.conversazioni.c2.titolo).toBe('Nuova');
+    expect(secondo.conversazione('c1')!.messaggi).toHaveLength(2);
+  });
+});

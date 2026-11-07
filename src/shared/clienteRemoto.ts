@@ -53,6 +53,11 @@ export const CHIUSURA = {
   hostAssente: 4000,
 } as const;
 
+export interface StatoClienteRemoto {
+  elenco: ProiezioneElenco;
+  conversazioni: Record<string, ProiezioneConversazione>;
+}
+
 export interface OpzioniClienteRemoto {
   /** Es. ws://127.0.0.1:8787/?token=... (in alternativa a canale). */
   url?: string;
@@ -158,6 +163,32 @@ export class ClienteRemoto {
       throw new Error(r.tipo === 'risposta' && !r.esito.ok ? r.esito.errore : 'Risposta non valida.');
     }
     return r.esito.dati as T;
+  }
+
+  /**
+   * Stato da conservare sul dispositivo (cifrato da chi lo salva): elenco e
+   * conversazioni aperte. Con ripristina() si riparte da qui: le conversazioni
+   * si leggono anche senza host, e al collegamento si recupera solo quello
+   * che è successo dopo (eventi.dopo).
+   */
+  istantanea(massimo = 30): StatoClienteRemoto {
+    const conversazioni: Record<string, ProiezioneConversazione> = {};
+    const aperte = [...this.conversazioni.entries()]
+      .filter((x): x is [string, ProiezioneConversazione] => !!x[1])
+      .sort((a, b) => b[1].aggiornataIl.localeCompare(a[1].aggiornataIl))
+      .slice(0, massimo);
+    // Un turno a metà non si conserva: al ritorno si rilegge dall'host.
+    for (const [id, c] of aperte) conversazioni[id] = c.turno ? { ...c, turno: null, stato: 'interrotta' } : c;
+    return { elenco: this.elenco, conversazioni };
+  }
+
+  /** Prima di connetti(): riparte dallo stato salvato. */
+  ripristina(stato: StatoClienteRemoto): void {
+    if (this.connesso) return;
+    this.elenco = stato.elenco;
+    this.conversazioni.clear();
+    for (const [id, c] of Object.entries(stato.conversazioni)) this.conversazioni.set(id, c);
+    this.notifica();
   }
 
   /** undefined mentre si carica; null se non esiste. Dopo il primo accesso resta aggiornata. */
