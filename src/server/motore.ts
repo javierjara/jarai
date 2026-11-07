@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk';
 import type { EventoMotore, Motore, RichiestaMotore } from '../core/host';
 import type { MessaggioProiettato } from '../shared/reducer';
+import { creaServerDejure, PROMPT_DEJURE, STRUMENTI_DEJURE, type ClienteDejure } from '../core/dejure';
 import { creaServerBozzeRemote, creaServerDocumentiRemoti, STRUMENTI_REMOTI, type FontiStudio } from './strumenti';
 
 // Il motore dell'assistente di riserva (JarAI Server): stesso SDK, stessi
@@ -48,6 +49,8 @@ export interface OpzioniMotoreServer {
   fonti: (praticaId: string | null, documenti: RichiestaMotore['documenti']) => FontiStudio;
   /** Messaggi già scambiati, per rimandarli se la sessione di Claude non c'è più. */
   storia: (conversazioneId: string) => MessaggioProiettato[];
+  /** DeJure con le credenziali dello studio, se collegato sul computer. */
+  dejure?: () => Pick<ClienteDejure, 'cerca' | 'leggi'> | null;
   /** Eseguibile di Claude Code (nell'immagine Docker). */
   eseguibile?: string;
   /** Per le prove: al posto dell'SDK vero. */
@@ -71,6 +74,8 @@ function attivita(nome: string): string {
   if (nome.endsWith('__cerca_nei_documenti')) return 'Sto cercando nei documenti della pratica…';
   if (nome.endsWith('__estrai_date')) return 'Sto ricostruendo le date della pratica…';
   if (nome.endsWith('__leggi_memoria_pratica')) return 'Sto ripassando gli appunti sulla pratica…';
+  if (nome.endsWith('__cerca_dejure')) return 'Sto cercando giurisprudenza su DeJure…';
+  if (nome.endsWith('__leggi_dejure')) return 'Sto leggendo una pronuncia su DeJure…';
   if (nome.endsWith('__crea_bozza')) return 'Sto preparando la bozza…';
   return 'Sto lavorando…';
 }
@@ -105,17 +110,19 @@ export class MotoreServer implements Motore {
     const prompt = resume ? r.testo : promptConStoria(ultimo >= 0 ? storia.slice(0, ultimo) : storia, r.testo);
     const fonti = this.o.fonti(r.praticaId, r.documenti);
     const qualita = r.qualita;
+    const dejure = this.o.dejure?.() ?? null;
     const opzioni: Options = {
       model: qualita === 'Massima' ? 'claude-opus-5-5' : 'claude-sonnet-5',
       effort: qualita === 'Massima' ? 'high' : 'medium',
       maxBudgetUsd: TETTO_USD[qualita],
-      systemPrompt: `${PROMPT_LEGALE_SERVER}\nOggi è ${new Date().toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.`,
+      systemPrompt: `${PROMPT_LEGALE_SERVER}${dejure ? PROMPT_DEJURE : ''}\nOggi è ${new Date().toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.`,
       tools: [],
       mcpServers: {
         'jarai-documenti': creaServerDocumentiRemoti(fonti),
         'jarai-bozze': creaServerBozzeRemote((b) => emetti({ tipo: 'bozza', ...b })),
+        ...(dejure ? { 'jarai-dejure': creaServerDejure(dejure) } : {}),
       },
-      allowedTools: STRUMENTI_REMOTI,
+      allowedTools: dejure ? [...STRUMENTI_REMOTI, ...STRUMENTI_DEJURE] : STRUMENTI_REMOTI,
       settingSources: [],
       includePartialMessages: true,
       maxTurns: Math.min(300, 20 + fonti.documenti.length * 3),

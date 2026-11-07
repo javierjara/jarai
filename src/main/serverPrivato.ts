@@ -131,7 +131,7 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
 
   const giro = async () => {
     await configura();
-    await importaConversazioni().catch((err) => void registraErroreGrezzo('server import', err instanceof Error ? err.message : String(err)));
+    await importaConversazioni().catch((err) => void registraErroreGrezzo('server importazione', err instanceof Error ? err.message : String(err)));
     if (sinc) await sinc.sincronizza();
     await caricaPacchetto().catch((err) => void registraErroreGrezzo('server pacchetto', err instanceof Error ? err.message : String(err)));
     // Telefoni scollegati mentre il server non rispondeva: il server li toglie ora.

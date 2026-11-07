@@ -9,15 +9,16 @@ VERSIONE="$(node -p "require('$RADICE/package.json').version")-$(git -C "$RADICE
 LAVORO="$(mktemp -d)"
 trap 'rm -rf "$LAVORO"' EXIT
 
-# L'SDK di Claude resta fuori dal pacchetto: nell'immagine si installa con il
-# suo eseguibile per Linux (stessa versione del desktop).
+# L'SDK di Claude e puppeteer-core restano fuori dal pacchetto: nell'immagine
+# si installano (l'SDK con il suo eseguibile per Linux), stesse versioni del desktop.
 SDK_VERSIONE="$(node -p "require('$RADICE/node_modules/@anthropic-ai/claude-agent-sdk/package.json').version")"
+PUPPETEER_VERSIONE="$(node -p "require('$RADICE/node_modules/puppeteer-core/package.json').version")"
 "$RADICE/node_modules/.bin/esbuild" "$RADICE/src/server/index.ts" --bundle --platform=node --target=node24 \
-  --format=esm --outfile="$LAVORO/server.mjs" --log-level=warning --external:@anthropic-ai/claude-agent-sdk \
+  --format=esm --outfile="$LAVORO/server.mjs" --log-level=warning --external:@anthropic-ai/claude-agent-sdk --external:puppeteer-core \
   "--banner:js=import{createRequire}from'module';const require=createRequire(import.meta.url);"
 cp "$RADICE/deploy/server/Dockerfile" "$LAVORO/"
 
 echo "Immagine jarai-server:$VERSIONE su $HOST"
 COPYFILE_DISABLE=1 tar --no-mac-metadata -C "$LAVORO" -cz . | ssh "$HOST" "set -e; d=\$(mktemp -d); tar -C \$d -xz; \
-  docker build -q --build-arg VERSIONE=$VERSIONE --build-arg SDK_VERSIONE=$SDK_VERSIONE -t jarai-server:$VERSIONE -t jarai-server:latest \$d; rm -rf \$d"
+  docker build -q --build-arg VERSIONE=$VERSIONE --build-arg SDK_VERSIONE=$SDK_VERSIONE --build-arg PUPPETEER_VERSIONE=$PUPPETEER_VERSIONE -t jarai-server:$VERSIONE -t jarai-server:latest \$d; rm -rf \$d"
 echo "$VERSIONE"

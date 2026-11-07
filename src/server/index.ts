@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { Archivio } from './archivio';
 import { collegaCanaleTelefono } from './canaleTelefono';
+import { DejureServer } from './dejure';
 import { MotoreServer } from './motore';
 import { StudioServer } from './studio';
 
@@ -91,6 +92,9 @@ const dopoCambio = () => {
 const ram = process.env.JARAI_SESSIONI ?? (existsSync('/dev/shm') ? '/dev/shm' : tmpdir());
 let cartellaSessioni: string | null = null;
 const registraErrore = (contesto: string, dettaglio: string) => console.error(`[${contesto}]`, dettaglio);
+// DeJure con Chromium headless (nell'immagine), profilo in RAM.
+const chromium = process.env.JARAI_CHROMIUM ?? (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : null);
+const dejure = chromium ? new DejureServer({ eseguibile: chromium, cartella: ram, registraErrore }) : null;
 const studio = new StudioServer({
   cartellaPratiche: pratiche,
   cartellaDati: dati,
@@ -98,9 +102,20 @@ const studio = new StudioServer({
   creaMotore: (contesto) => {
     cartellaSessioni = join(ram, `jarai-claude-${randomBytes(8).toString('hex')}`);
     mkdirSync(cartellaSessioni, { recursive: true, mode: 0o700 });
-    return new MotoreServer({ proxy, licenza, cartellaSessioni, fonti: contesto.fonti, storia: contesto.storia, eseguibile: process.env.JARAI_CLAUDE, registraErrore });
+    dejure?.imposta(contesto.dejure);
+    return new MotoreServer({
+      proxy,
+      licenza,
+      cartellaSessioni,
+      fonti: contesto.fonti,
+      storia: contesto.storia,
+      dejure: () => (dejure?.disponibile ? dejure.cliente : null),
+      eseguibile: process.env.JARAI_CLAUDE,
+      registraErrore,
+    });
   },
   onDimentica: () => {
+    void dejure?.dimentica();
     if (cartellaSessioni) rmSync(cartellaSessioni, { recursive: true, force: true });
     cartellaSessioni = null;
   },

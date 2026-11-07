@@ -122,6 +122,7 @@ describe('assistente di riserva sul server privato', () => {
     const fonti = s.contesto().fonti('p1', PACCHETTO.documenti.p1);
     expect(await fonti.testo('d1')).toContain('12.400');
     expect(fonti.memoria).toMatchObject({ fatti: { giudice: { valore: 'Tribunale di Genova' } } });
+    expect(s.contesto().dejure).toBeNull();
     expect(s.motore().richieste.at(-1)).toMatchObject({ praticaId: 'p1', documenti: [{ id: 'd1' }] });
 
     s.motore().emetti('c1', { tipo: 'delta', testo: 'Euro ' });
