@@ -22,6 +22,8 @@ export interface OpzioniArchivio {
   /** Byte disponibili; null = senza limite. */
   limite: () => Promise<number | null>;
   orologio?: () => string;
+  /** Dopo ogni file caricato o tolto (per riferire lo stato al CRM). */
+  onCambio?: () => void;
 }
 
 export function preparaDb(db: DatabaseSync): void {
@@ -49,6 +51,12 @@ function autorizzato(req: IncomingMessage, licenza: string): boolean {
 export class Archivio {
   constructor(private readonly o: OpzioniArchivio) {
     preparaDb(o.db);
+  }
+
+  /** Numero di file e data dell'ultimo caricamento. */
+  riepilogo(): { file: number; ultimoCaricamento: string | null } {
+    const r = this.o.db.prepare('SELECT COUNT(*) AS n, MAX(aggiornato_il) AS ultimo FROM archivio_file').get() as { n: number; ultimo: string | null };
+    return { file: r.n, ultimoCaricamento: r.ultimo };
   }
 
   usati(): number {
@@ -88,6 +96,7 @@ export class Archivio {
     else if (req.method === 'DELETE') {
       await rm(this.percorso(chiave), { force: true });
       this.o.db.prepare('DELETE FROM archivio_file WHERE chiave = ?').run(chiave);
+      this.o.onCambio?.();
       rispondi(res, 200, { ok: true });
     } else rispondi(res, 405, { errore: 'Metodo non ammesso.' });
     return true;
@@ -135,6 +144,7 @@ export class Archivio {
          ON CONFLICT(chiave) DO UPDATE SET dimensione = excluded.dimensione, sha256 = excluded.sha256, aggiornato_il = excluded.aggiornato_il`,
       )
       .run(chiave, dimensione, atteso, (this.o.orologio ?? (() => new Date().toISOString()))());
+    this.o.onCambio?.();
     rispondi(res, 200, { ok: true });
   }
 }

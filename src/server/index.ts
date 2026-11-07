@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { mkdirSync } from 'node:fs';
+import { statfs } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Archivio } from './archivio';
@@ -14,6 +15,7 @@ import { Archivio } from './archivio';
 //   JARAI_PRATICHE      cartella dei file (default /pratiche)
 //   JARAI_LIMITE_GB     limite di spazio; se manca lo chiede al proxy (CRM)
 //   JARAI_PROXY_URL     default https://jarai-proxy.jarai-antonio.workers.dev
+//   JARAI_VERSIONE      versione mostrata nel CRM
 //   PORT                default 8787
 
 const licenza = process.env.JARAI_LICENZA ?? '';
@@ -47,7 +49,37 @@ async function limite(): Promise<number | null> {
   }
 }
 
-const archivio = new Archivio({ db: new DatabaseSync(join(dati, 'archivio.db')), cartella: pratiche, licenza, limite });
+const VERSIONE = process.env.JARAI_VERSIONE ?? 'sviluppo';
+
+// Stato riferito al CRM (pagina Server): spazio, file, disco. Dopo ogni
+// cambio (raggruppati) e ogni 5 minuti, così il CRM vede anche se il
+// server è spento (ultimo contatto vecchio).
+let attesaStato: ReturnType<typeof setTimeout> | null = null;
+async function riferisciStato(): Promise<void> {
+  const { file, ultimoCaricamento } = archivio.riepilogo();
+  const disco = await statfs(pratiche).catch(() => null);
+  await fetch(`${proxy}/v1/server/stato`, {
+    method: 'POST',
+    headers: { 'x-api-key': licenza, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      usati: archivio.usati(),
+      file,
+      limite: await limite(),
+      disco_libero: disco ? disco.bavail * disco.bsize : null,
+      disco_totale: disco ? disco.blocks * disco.bsize : null,
+      ultimo_caricamento: ultimoCaricamento,
+      versione: VERSIONE,
+    }),
+  }).catch((err) => console.error('stato al CRM non inviato', err instanceof Error ? err.message : err));
+}
+const dopoCambio = () => {
+  if (attesaStato) clearTimeout(attesaStato);
+  attesaStato = setTimeout(() => void riferisciStato(), 5_000);
+};
+
+const archivio = new Archivio({ db: new DatabaseSync(join(dati, 'archivio.db')), cartella: pratiche, licenza, limite, onCambio: dopoCambio });
+void riferisciStato();
+setInterval(() => void riferisciStato(), 5 * 60_000);
 
 const server = createServer((req, res) => {
   if (req.url === '/salute') {
