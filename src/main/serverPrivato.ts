@@ -1,6 +1,7 @@
 import { app, ipcMain, type BrowserWindow } from 'electron';
 import { randomBytes } from 'node:crypto';
-import type { AccessoServer } from '../shared/archivio';
+import { decifraArchivio, type AccessoServer } from '../shared/archivio';
+import type { Evento } from '../shared/protocollo';
 import { casuale } from '../shared/cifratura';
 import { dispositivoAttivo, elencaDispositivi } from '../core/dispositivi';
 import { join } from 'node:path';
@@ -116,8 +117,21 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
     ultimoPacchetto = impronta;
   };
 
+  // Le conversazioni fatte dal telefono sull'assistente di riserva, mentre
+  // questo computer era spento: entrano nel log di qui e si tolgono dal server.
+  const importaConversazioni = async () => {
+    if (!cliente || !chiave) return;
+    for (const c of await cliente.elencoConversazioni()) {
+      if (c.inCorso) continue; // si prende al prossimo giro, a risposta finita
+      const { eventi } = JSON.parse(Buffer.from(decifraArchivio(chiave, await cliente.scaricaConversazione(c.id))).toString('utf8')) as { eventi: Evento[] };
+      host.importaConversazione(eventi);
+      await cliente.eliminaConversazione(c.id);
+    }
+  };
+
   const giro = async () => {
     await configura();
+    await importaConversazioni().catch((err) => void registraErroreGrezzo('server import', err instanceof Error ? err.message : String(err)));
     if (sinc) await sinc.sincronizza();
     await caricaPacchetto().catch((err) => void registraErroreGrezzo('server pacchetto', err instanceof Error ? err.message : String(err)));
     // Telefoni scollegati mentre il server non rispondeva: il server li toglie ora.

@@ -196,6 +196,33 @@ export class Host {
     return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id, esito: { ok: false, errore: 'Richiesta non valida.' } };
   }
 
+  /**
+   * Una conversazione nata sull'assistente di riserva (server privato, a
+   * computer spento) entra in questo log: stessi eventi, stessa data, seq
+   * nuovi. Ripetere l'import non cambia niente (comandoId per conversazione).
+   */
+  importaConversazione(eventi: Evento[]): { importati: number; giaPresente: boolean } {
+    const id = eventi[0]?.conversazioneId;
+    if (!id || eventi[0].tipo !== 'conversazione_creata' || eventi.some((e) => e.conversazioneId !== id || e.seq === null)) {
+      throw new Error('conversazione da importare non valida');
+    }
+    const comandoId = `import-server:${id}`;
+    if (this.store.comandoEseguito(comandoId)) return { importati: 0, giaPresente: true };
+    // Un id che esiste già qui (non dovrebbe: sono casuali) non si sovrascrive.
+    if (this.conversazione(id)) return { importati: 0, giaPresente: true };
+    const p = eventi[0].payload as { modalita: string; praticaId: string | null };
+    const scritti = this.scriviInTransazione(() => {
+      this.db.prepare('INSERT OR IGNORE INTO conversazione (id, modalita, pratica_id, creata_il) VALUES (?, ?, ?, ?)').run(id, p.modalita, p.praticaId, eventi[0].creatoIl);
+      return eventi.map(({ seq: _seq, ...e }) => e as EventoNuovo);
+    }, comandoId);
+    return { importati: scritti.length, giaPresente: false };
+  }
+
+  /** C'è una risposta in corso (il server privato non può dimenticare la chiave adesso). */
+  haTurniAperti(): boolean {
+    return this.turni.size > 0;
+  }
+
   /** Ogni evento, persistito o transitorio, appena accade. */
   abbona(fn: (evento: Evento) => void): () => void {
     this.abbonati.add(fn);

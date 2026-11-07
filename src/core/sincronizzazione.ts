@@ -158,6 +158,20 @@ export class ClienteArchivio {
     });
   }
 
+  /** Conversazioni nate sull'assistente di riserva, da importare. */
+  async elencoConversazioni(): Promise<Array<{ id: string; inCorso: boolean }>> {
+    return ((await (await this.chiama('/sync/conversazioni')).json()) as { conversazioni: Array<{ id: string; inCorso: boolean }> }).conversazioni;
+  }
+
+  /** Il file cifrato di una conversazione del server (lo decifra il computer). */
+  async scaricaConversazione(id: string): Promise<Uint8Array> {
+    return new Uint8Array(await (await this.chiama(`/sync/conversazioni/${encodeURIComponent(id)}`)).arrayBuffer());
+  }
+
+  async eliminaConversazione(id: string): Promise<void> {
+    await this.chiama(`/sync/conversazioni/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   /** Il pacchetto dello studio (elenco, memorie…), già cifrato con la chiave dello studio. */
   async caricaPacchetto(cifrato: Uint8Array): Promise<void> {
     await this.chiama('/sync/pacchetto', {

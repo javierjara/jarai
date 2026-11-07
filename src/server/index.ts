@@ -3,11 +3,17 @@ import { mkdirSync } from 'node:fs';
 import { statfs } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { Archivio } from './archivio';
+import { collegaCanaleTelefono } from './canaleTelefono';
+import { MotoreServer } from './motore';
+import { StudioServer } from './studio';
 
 // JarAI Server (deploy/README.md): un container per studio, dietro il Caddy
-// condiviso. Primo pezzo: l'archivio delle pratiche sincronizzato dal
-// desktop. L'host con l'assistente arriverà qui, sullo stesso processo.
+// condiviso. L'archivio delle pratiche sincronizzato dal desktop e, a
+// computer spento, l'assistente di riserva per i telefoni (studio.ts).
 //
 // Ambiente:
 //   JARAI_LICENZA       licenza dello studio (credenziale del desktop)
@@ -16,6 +22,8 @@ import { Archivio } from './archivio';
 //   JARAI_LIMITE_GB     limite di spazio; se manca lo chiede al proxy (CRM)
 //   JARAI_PROXY_URL     default https://jarai-proxy.jarai-antonio.workers.dev
 //   JARAI_VERSIONE      versione mostrata nel CRM
+//   JARAI_CLAUDE        eseguibile di Claude Code (nell'immagine Docker)
+//   JARAI_SESSIONI      cartella in RAM per le sessioni di Claude (nel container /tmp, tmpfs)
 //   PORT                default 8787
 
 const licenza = process.env.JARAI_LICENZA ?? '';
@@ -77,7 +85,35 @@ const dopoCambio = () => {
   attesaStato = setTimeout(() => void riferisciStato(), 5_000);
 };
 
-const archivio = new Archivio({ db: new DatabaseSync(join(dati, 'archivio.db')), cartella: pratiche, licenza, limite, onCambio: dopoCambio });
+// Sessioni di Claude in RAM (contengono la conversazione in chiaro): /dev/shm
+// nel container, una cartella nuova a ogni apertura, cancellata quando il
+// server dimentica la chiave.
+const ram = process.env.JARAI_SESSIONI ?? (existsSync('/dev/shm') ? '/dev/shm' : tmpdir());
+let cartellaSessioni: string | null = null;
+const registraErrore = (contesto: string, dettaglio: string) => console.error(`[${contesto}]`, dettaglio);
+const studio = new StudioServer({
+  cartellaPratiche: pratiche,
+  cartellaDati: dati,
+  registraErrore,
+  creaMotore: (contesto) => {
+    cartellaSessioni = join(ram, `jarai-claude-${randomBytes(8).toString('hex')}`);
+    mkdirSync(cartellaSessioni, { recursive: true, mode: 0o700 });
+    return new MotoreServer({ proxy, licenza, cartellaSessioni, fonti: contesto.fonti, storia: contesto.storia, eseguibile: process.env.JARAI_CLAUDE, registraErrore });
+  },
+  onDimentica: () => {
+    if (cartellaSessioni) rmSync(cartellaSessioni, { recursive: true, force: true });
+    cartellaSessioni = null;
+  },
+});
+
+const archivio = new Archivio({
+  db: new DatabaseSync(join(dati, 'archivio.db')),
+  cartella: pratiche,
+  licenza,
+  limite,
+  onCambio: dopoCambio,
+  conversazioni: { elenco: () => studio.conversazioniSalvate(), leggi: (id) => studio.leggiConversazione(id), elimina: (id) => studio.eliminaConversazione(id) },
+});
 void riferisciStato();
 setInterval(() => void riferisciStato(), 5 * 60_000);
 
@@ -103,4 +139,9 @@ const server = createServer((req, res) => {
 });
 // Upload lunghi su reti lente: niente timeout di richiesta.
 server.requestTimeout = 0;
+collegaCanaleTelefono(server, { telefonoDaToken: (t) => archivio.telefonoDaToken(t), studio, registraErrore });
+// Spegnimento: le conversazioni in sospeso si salvano prima di uscire.
+for (const segnale of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(segnale, () => void studio.dimentica(true).finally(() => process.exit(0)));
+}
 server.listen(Number(process.env.PORT ?? 8787), () => console.log(`JarAI Server in ascolto su ${process.env.PORT ?? 8787}`));

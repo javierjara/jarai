@@ -27,6 +27,12 @@ import { FORMATO_CHIAVE, type ElencoRemoto } from '../core/sincronizzazione';
 
 export const MAX_FILE = 2 * 1024 ** 3;
 
+export interface ConversazioniServer {
+  elenco(): Promise<Array<{ id: string; dimensione: number; aggiornataIl: string; inCorso: boolean }>>;
+  leggi(id: string): Promise<Buffer | null>;
+  elimina(id: string): Promise<void>;
+}
+
 export interface OpzioniArchivio {
   db: DatabaseSync;
   cartella: string;
@@ -38,6 +44,8 @@ export interface OpzioniArchivio {
   onCambio?: () => void;
   /** Arrivato un pacchetto nuovo dal desktop. */
   onPacchetto?: () => void;
+  /** Conversazioni dell'assistente di riserva, che il desktop importa (src/server/studio.ts). */
+  conversazioni?: ConversazioniServer;
 }
 
 export function preparaDb(db: DatabaseSync): void {
@@ -141,7 +149,12 @@ export class Archivio {
 
   /** Il telefono di questo token, se registrato dal desktop. */
   private telefono(req: IncomingMessage): string | null {
-    const m = /^Bearer ([A-Za-z0-9_-]{16,64})\.([A-Za-z0-9_-]{32,128})$/.exec(req.headers.authorization ?? '');
+    return this.telefonoDaToken(/^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '');
+  }
+
+  /** "<id>.<token>" → id del telefono, se il desktop l'ha registrato. */
+  telefonoDaToken(token: string): string | null {
+    const m = /^([A-Za-z0-9_-]{16,64})\.([A-Za-z0-9_-]{32,128})$/.exec(token);
     if (!m) return null;
     const riga = this.o.db.prepare('SELECT impronta FROM archivio_telefono WHERE id = ?').get(m[1]) as { impronta: string } | undefined;
     // Confronto a tempo costante (si confrontano impronte di uguale lunghezza).
@@ -166,6 +179,10 @@ export class Archivio {
       rispondi(res, 200, await this.elenco());
       return true;
     }
+    if (url.pathname.startsWith('/sync/conversazioni') && this.o.conversazioni) {
+      await this.gestisciConversazioni(url, req, res, this.o.conversazioni);
+      return true;
+    }
     if (url.pathname === '/sync/pacchetto' && req.method === 'PUT') {
       await this.ricevi(req, res, this.percorsoPacchetto(), 50 * 1024 ** 2);
       return true;
@@ -188,6 +205,30 @@ export class Archivio {
       rispondi(res, 200, { ok: true });
     } else rispondi(res, 405, { errore: 'Metodo non ammesso.' });
     return true;
+  }
+
+  /**
+   * Il desktop importa le conversazioni nate qui a computer spento:
+   *   GET    /sync/conversazioni          elenco
+   *   GET    /sync/conversazioni/<id>     file cifrato (lo decifra il desktop)
+   *   DELETE /sync/conversazioni/<id>     importata: si toglie
+   */
+  private async gestisciConversazioni(url: URL, req: IncomingMessage, res: ServerResponse, c: ConversazioniServer): Promise<void> {
+    if (url.pathname === '/sync/conversazioni' && req.method === 'GET') return rispondi(res, 200, { conversazioni: await c.elenco() });
+    const id = decodeURIComponent(url.pathname.slice('/sync/conversazioni/'.length));
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) return rispondi(res, 404, { errore: 'Non trovato.' });
+    if (req.method === 'GET') {
+      const dati = await c.leggi(id);
+      if (!dati) return rispondi(res, 404, { errore: 'Non trovato.' });
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': dati.length });
+      res.end(dati);
+      return;
+    }
+    if (req.method === 'DELETE') {
+      await c.elimina(id);
+      return rispondi(res, 200, { ok: true });
+    }
+    rispondi(res, 405, { errore: 'Metodo non ammesso.' });
   }
 
   private async gestisciTelefoni(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {

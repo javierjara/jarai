@@ -2,8 +2,8 @@
 #   cd /srv/jarai/<studio> && docker compose -p jarai-<studio> up -d
 #
 # L'immagine si costruisce sul server con deploy/scripts/costruisci-server.sh
-# (jarai-server:latest). Oggi contiene l'archivio cifrato delle pratiche
-# (Server privato); l'host con l'assistente arriverà nella stessa immagine.
+# (jarai-server:latest). Contiene l'archivio cifrato delle pratiche (Server
+# privato) e l'assistente di riserva per i telefoni a computer spento.
 services:
   jarai:
     image: ${JARAI_IMAGE:-jarai-server:latest}
@@ -20,6 +20,7 @@ services:
       - ./dati:/var/lib/jarai
       - ./pratiche:/pratiche
     read_only: true
+    # RAM: file temporanei e sessioni dell'assistente (mai su disco).
     tmpfs:
       - /tmp:size=512m
     security_opt:
