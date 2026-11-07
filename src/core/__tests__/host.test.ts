@@ -1,10 +1,14 @@
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Comando, Evento } from '../../shared/protocollo';
 import { messaggiVisibili, ricostruisciConversazione, riduciConversazione, type ProiezioneConversazione } from '../../shared/reducer';
 import { apriDatabase } from '../db';
 import { EventStore } from '../eventStore';
 import type { SnapshotEntita } from '../entita';
-import { Host, MESSAGGI } from '../host';
+import { Host, MESSAGGI, PEZZO_DOCUMENTO } from '../host';
 import { attesa, MotoreFinto } from './motoreFinto';
 import { migraResto } from '../migrazioneJson';
 
@@ -376,5 +380,65 @@ describe('bozza.esporta (file per il telefono)', () => {
       },
     });
     expect(await rotto.gestisciBusta(richiesta('pdf'))).toMatchObject({ esito: { ok: false, errore: 'Non sono riuscito a preparare il documento.' } });
+  });
+});
+
+describe('documento.leggi (file delle pratiche per il telefono)', () => {
+  const cartella = mkdtempSync(join(tmpdir(), 'jarai-doc-'));
+  const contenuto = randomBytes(PEZZO_DOCUMENTO * 2 + 1234);
+  writeFileSync(join(cartella, 'Contratto.pdf'), contenuto);
+
+  const conPratica = (percorso: string | null, opzioni = {}) => {
+    const db = apriDatabase(':memory:');
+    migraResto(db, {
+      pratiche: [{ id: 'p1', nome: 'Rossi c. Bianchi', cliente: 'Rossi', ambito: 'Civile', documenti: 1, aggiornataIl: '2026-11-07T10:00:00.000Z', cartellaPercorso: cartella }],
+      documenti: { p1: [{ id: 'd1', nome: 'Contratto', tipo: 'PDF', data: '2026-03-03', cartella: 'Atti', ...(percorso ? { percorso } : {}) }] },
+    } as never);
+    return new Host(db, new MotoreFinto(), opzioni);
+  };
+  const leggi = (host: Host, da: number, documentoId = 'd1', praticaId = 'p1') =>
+    host.gestisciBusta({ v: 1, tipo: 'richiesta', id: 'r', richiesta: { tipo: 'documento.leggi', praticaId, documentoId, da } }) as Promise<{
+      esito: { ok: boolean; errore?: string; dati?: { nome: string; mime: string; dimensione: number; da: number; base64: string; fine: boolean } };
+    }>;
+
+  it('manda il file a pezzi e i pezzi ricompongono il file', async () => {
+    const host = conPratica(join(cartella, 'Contratto.pdf'));
+    const pezzi: Buffer[] = [];
+    for (let da = 0, giri = 0; giri < 10; giri++) {
+      const { esito } = await leggi(host, da);
+      expect(esito.ok).toBe(true);
+      const d = esito.dati!;
+      expect(d).toMatchObject({ nome: 'Contratto.pdf', mime: 'application/pdf', dimensione: contenuto.length, da });
+      const b = Buffer.from(d.base64, 'base64');
+      expect(b.length).toBeLessThanOrEqual(PEZZO_DOCUMENTO);
+      pezzi.push(b);
+      da += b.length;
+      if (d.fine) break;
+    }
+    expect(pezzi).toHaveLength(3);
+    expect(Buffer.concat(pezzi).equals(contenuto)).toBe(true);
+  });
+
+  it('legge solo documenti registrati nella pratica, mai un percorso scelto dal client', async () => {
+    const host = conPratica(join(cartella, 'Contratto.pdf'));
+    expect((await leggi(host, 0, 'd1', 'altra')).esito).toEqual({ ok: false, errore: 'Questo documento non è più nella pratica.' });
+    expect((await leggi(host, 0, '../../etc/passwd')).esito.ok).toBe(false);
+    const forzata = await host.gestisciBusta({ v: 1, tipo: 'richiesta', id: 'r', richiesta: { tipo: 'documento.leggi', praticaId: 'p1', documentoId: 'd1', da: 0, percorso: '/etc/passwd' } });
+    expect((forzata as { esito: { dati: { nome: string } } }).esito.dati.nome).toBe('Contratto.pdf');
+  });
+
+  it('spiega quando il file manca o non è mai stato collegato', async () => {
+    expect((await leggi(conPratica(join(cartella, 'Spostato.pdf')), 0)).esito).toEqual({
+      ok: false,
+      errore: 'Il file non si trova più sul computer: forse è stato spostato o rinominato.',
+    });
+    expect((await leggi(conPratica(null), 0)).esito).toEqual({ ok: false, errore: 'Questo documento non ha un file sul computer.' });
+  });
+
+  it('su JarAI Server traduce il percorso del desktop nella cartella del server', async () => {
+    const host = conPratica('C:\\Studio\\Rossi\\Contratto.pdf', { risolviPercorso: () => join(cartella, 'Contratto.pdf') });
+    const { esito } = await leggi(host, contenuto.length - 10);
+    expect(esito.dati).toMatchObject({ da: contenuto.length - 10, fine: true });
+    expect(Buffer.from(esito.dati!.base64, 'base64').equals(contenuto.subarray(-10))).toBe(true);
   });
 });

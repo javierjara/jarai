@@ -1,3 +1,5 @@
+import { open, type FileHandle } from 'node:fs/promises';
+import { basename, extname } from 'node:path';
 import {
   bustaSchema,
   VERSIONE_PROTOCOLLO,
@@ -12,6 +14,7 @@ import {
   type IdeaProposta,
   type LavoroDocumento,
   type Modalita,
+  type PezzoDocumento,
   type Qualita,
   type Richiesta,
 } from '../shared/protocollo';
@@ -37,6 +40,35 @@ import {
 } from './entita';
 import { EventStore, type EventoNuovo } from './eventStore';
 import { MIGRAZIONE_RESTO, migrazioneFatta } from './migrazioneJson';
+
+/**
+ * Byte per pezzo di documento.leggi: in base64 e cifrato resta sotto i
+ * 512 KB per messaggio, comodo per il relay anche su reti lente.
+ */
+export const PEZZO_DOCUMENTO = 384 * 1024;
+
+const MIME: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.txt': 'text/plain',
+  '.rtf': 'application/rtf',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.heic': 'image/heic',
+  '.eml': 'message/rfc822',
+  '.msg': 'application/vnd.ms-outlook',
+  '.p7m': 'application/pkcs7-mime',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+};
+
+function mimeDi(percorso: string): string {
+  return MIME[extname(percorso).toLowerCase()] ?? 'application/octet-stream';
+}
 
 // Host (docs/eventstore-protocollo.md §2): l'unico che scrive lo stato delle
 // conversazioni. Riceve comandi da qualsiasi client (finestra Electron oggi,
@@ -89,6 +121,12 @@ export interface OpzioniHost {
   registraErrore?: (contesto: string, dettaglio: string) => void;
   /** Word/PDF di una bozza (sul desktop: docx e stampa di Chromium). */
   esportaBozza?: (bozza: { titolo: string; contenuto: string }, formato: FormatoBozza) => Promise<Uint8Array>;
+  /**
+   * Dove sta davvero il file di un documento. Sul desktop è il percorso
+   * registrato; su JarAI Server le cartelle delle pratiche sono altrove
+   * (es. /pratiche) e il server lo traduce.
+   */
+  risolviPercorso?: (percorso: string) => string;
 }
 
 export interface Origine {
@@ -121,6 +159,7 @@ export class Host {
   private readonly nuovoId: () => string;
   private readonly registraErrore: (contesto: string, dettaglio: string) => void;
   private readonly esportaBozza: OpzioniHost['esportaBozza'];
+  private readonly risolviPercorso: (percorso: string) => string;
   private elenco: ProiezioneElenco = ELENCO_VUOTO;
   private readonly cache = new Map<string, ProiezioneConversazione>();
   private readonly abbonati = new Set<(evento: Evento) => void>();
@@ -135,6 +174,7 @@ export class Host {
     this.nuovoId = opzioni.nuovoId ?? (() => crypto.randomUUID());
     this.registraErrore = opzioni.registraErrore ?? (() => undefined);
     this.esportaBozza = opzioni.esportaBozza;
+    this.risolviPercorso = opzioni.risolviPercorso ?? ((p) => p);
     this.store = new EventStore(db, this.orologio);
 
     for (let seq = 0; ; ) {
@@ -161,6 +201,9 @@ export class Host {
     }
     if (busta.tipo === 'richiesta' && busta.richiesta.tipo === 'bozza.esporta') {
       return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: await this.esporta(busta.richiesta) };
+    }
+    if (busta.tipo === 'richiesta' && busta.richiesta.tipo === 'documento.leggi') {
+      return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: await this.leggiDocumento(busta.richiesta) };
     }
     if (busta.tipo === 'richiesta') {
       return { v: VERSIONE_PROTOCOLLO, tipo: 'risposta', id: busta.id, esito: { ok: true, dati: this.richiedi(busta.richiesta) } };
@@ -192,7 +235,8 @@ export class Host {
         // l'elenco per filtrare.
         return {};
       case 'bozza.esporta':
-        return {}; // asincrona: la gestisce esporta()
+      case 'documento.leggi':
+        return {}; // asincrone: le gestiscono esporta() e leggiDocumento()
     }
   }
 
@@ -213,6 +257,41 @@ export class Host {
     } catch (err) {
       this.registraErrore('esporta', err instanceof Error ? err.message : String(err));
       return { ok: false, errore: 'Non sono riuscito a preparare il documento.' };
+    }
+  }
+
+  private async leggiDocumento(r: Extract<Richiesta, { tipo: 'documento.leggi' }>): Promise<EsitoComando | { ok: true; dati: PezzoDocumento }> {
+    const doc = this.db
+      .prepare('SELECT nome, percorso FROM documento WHERE pratica_id = ? AND id = ?')
+      .get(r.praticaId, r.documentoId) as { nome: string; percorso: string | null } | undefined;
+    if (!doc) return { ok: false, errore: 'Questo documento non è più nella pratica.' };
+    if (!doc.percorso) return { ok: false, errore: 'Questo documento non ha un file sul computer.' };
+    let file: FileHandle | null = null;
+    try {
+      const percorso = this.risolviPercorso(doc.percorso);
+      file = await open(percorso, 'r');
+      const { size } = await file.stat();
+      const da = Math.min(r.da, size);
+      const buffer = Buffer.alloc(Math.min(PEZZO_DOCUMENTO, size - da));
+      const { bytesRead } = buffer.length ? await file.read(buffer, 0, buffer.length, da) : { bytesRead: 0 };
+      return {
+        ok: true,
+        dati: {
+          nome: basename(percorso),
+          mime: mimeDi(percorso),
+          dimensione: size,
+          da,
+          base64: buffer.subarray(0, bytesRead).toString('base64'),
+          fine: da + bytesRead >= size,
+        },
+      };
+    } catch (err) {
+      const codice = (err as NodeJS.ErrnoException).code;
+      if (codice === 'ENOENT') return { ok: false, errore: 'Il file non si trova più sul computer: forse è stato spostato o rinominato.' };
+      this.registraErrore('documento', err instanceof Error ? err.message : String(err));
+      return { ok: false, errore: 'Non riesco a leggere il documento.' };
+    } finally {
+      await file?.close();
     }
   }
 

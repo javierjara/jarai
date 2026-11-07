@@ -37,8 +37,30 @@ export const richiestaSchema = z.discriminatedUnion('tipo', [
     contenuto: z.string().max(400_000),
     formato: z.enum(['word', 'pdf']),
   }),
+  // Un documento di una pratica, a pezzi (i file delle pratiche possono
+  // essere grandi). L'host legge solo i file registrati nella pratica: il
+  // client indica pratica e documento, mai un percorso.
+  z.object({
+    tipo: z.literal('documento.leggi'),
+    praticaId: z.string().min(1),
+    documentoId: z.string().min(1),
+    da: z.number().int().nonnegative().default(0),
+  }),
 ]);
 export type FormatoBozza = 'word' | 'pdf';
+
+/** Risposta di documento.leggi: un pezzo del file, da `da` in poi. */
+export interface PezzoDocumento {
+  nome: string;
+  mime: string;
+  /** Dimensione totale del file, in byte. */
+  dimensione: number;
+  da: number;
+  /** Byte del pezzo, in base64. */
+  base64: string;
+  /** È l'ultimo pezzo. */
+  fine: boolean;
+}
 
 /** Risposta di bozza.esporta. */
 export interface FileEsportato {
