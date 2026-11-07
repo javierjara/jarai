@@ -14,6 +14,6 @@ trap 'rm -rf "$LAVORO"' EXIT
 cp "$RADICE/deploy/server/Dockerfile" "$LAVORO/"
 
 echo "Immagine jarai-server:$VERSIONE su $HOST"
-tar -C "$LAVORO" -cz . | ssh "$HOST" "set -e; d=\$(mktemp -d); tar -C \$d -xz; \
+COPYFILE_DISABLE=1 tar --no-mac-metadata -C "$LAVORO" -cz . | ssh "$HOST" "set -e; d=\$(mktemp -d); tar -C \$d -xz; \
   docker build -q --build-arg VERSIONE=$VERSIONE -t jarai-server:$VERSIONE -t jarai-server:latest \$d; rm -rf \$d"
 echo "$VERSIONE"

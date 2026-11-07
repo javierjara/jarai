@@ -3,9 +3,10 @@
 Primo caso: **Studio Legale Molfino** sul server Hetzner di Botcom. La
 procedura è uguale per ogni studio: cambia solo il nome (`molfino`).
 
-> Stato: il server si può **preparare** già adesso. L'immagine `jarai-server`
-> arriva con il passo "JarAI Server" di `docs/eventstore-protocollo.md`, e
-> solo allora il software si collega.
+> Stato (7 novembre 2026): **attivo per Molfino** su
+> `https://molfino.jarai.botcom.it`, immagine `jarai-server:0.2.2-6b074e0`.
+> Oggi contiene l'archivio cifrato delle pratiche (Server privato); l'host
+> con l'assistente arriverà nella stessa immagine.
 
 ## Principi (server condiviso)
 
@@ -42,9 +43,15 @@ procedura è uguale per ogni studio: cambia solo il nome (`molfino`).
    poi `caddy validate` e `caddy reload` dentro `caddy-caddy-1`. Va fatto solo
    quando il container esiste, altrimenti Caddy risponde 502.
    (`proxy/nginx.conf` resta per server con nginx.)
-5. **Compose**: si copiano `docker-compose.yml` e `.env` in
-   `/srv/jarai/molfino` → `docker compose -p jarai-molfino up -d`
-   (quando l'immagine esiste).
+5. **Immagine**: `deploy/scripts/costruisci-server.sh` impacchetta `src/server`
+   e costruisce `jarai-server:<versione>` direttamente sul server (niente registry).
+6. **Compose**: `docker-compose.yml` e `.env` (600, proprietario jarai; la
+   licenza dello studio si prende dal CRM) in `/srv/jarai/molfino`, poi
+   `sudo docker compose --project-directory /srv/jarai/molfino -p jarai-molfino up -d`.
+   Per aggiornare: nuova immagine, `JARAI_IMAGE` nel `.env`, stesso comando.
+7. **CRM**: Licenze → «Server privato» attivo, indirizzo e GB. La pagina
+   Server mostra spazio, file, disco e ultimo contatto (il server riferisce
+   ogni 5 minuti).
 
 ## Da fare prima di mettere dentro dati veri
 
@@ -52,5 +59,7 @@ procedura è uguale per ogni studio: cambia solo il nome (`molfino`).
 - [ ] **Nomina ad amministratore di sistema** (provv. Garante 27/11/2008) per chi ha accesso root.
 - [ ] **Log degli accessi** amministrativi conservati per almeno 6 mesi e non modificabili (journald persistente + invio esterno).
 - [ ] **Backup cifrati** fuori dal server (restic verso Hetzner Storage Box, in UE), con una prova di ripristino.
-- [ ] **Cifratura a riposo** con una chiave che resta allo studio (requisito di JarAI Server).
-- [ ] **Datacenter Hetzner in UE** (Falkenstein, Norimberga o Helsinki) verificato.
+- [x] **Cifratura a riposo** con una chiave che resta allo studio: i file arrivano già cifrati dal
+      desktop (`src/core/cifraturaArchivio.ts`), il server rifiuta quelli in chiaro. Vale per
+      l'archivio; l'host con l'assistente dovrà ricevere la chiave dallo studio all'avvio.
+- [x] **Datacenter Hetzner in UE**: Helsinki (`hel1-dc2`), verificato il 7 novembre 2026.
