@@ -66,6 +66,9 @@ export function leggiEntita(
     const { pratica_id, ...d } = r;
     (documenti[pratica_id] ??= []).push(senzaNull(d) as Documento);
   }
+  // Il contatore salvato sulla pratica può restare indietro (documenti
+  // aggiunti dall'indice della cartella): conta quelli registrati davvero.
+  for (const p of pratiche) if (documenti[p.id]) p.documenti = documenti[p.id].length;
 
   const impostazione = (chiave: string) => {
     const r = db.prepare('SELECT valore FROM impostazione WHERE chiave = ?').get(chiave) as { valore: string } | undefined;

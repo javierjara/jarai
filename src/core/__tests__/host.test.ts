@@ -442,3 +442,22 @@ describe('documento.leggi (file delle pratiche per il telefono)', () => {
     expect(Buffer.from(esito.dati!.base64, 'base64').equals(contenuto.subarray(-10))).toBe(true);
   });
 });
+
+describe('snapshot.entita: numero di documenti', () => {
+  it('conta i documenti registrati, non il contatore salvato sulla pratica', () => {
+    const db = apriDatabase(':memory:');
+    const doc = (id: string) => ({ id, nome: id, tipo: 'PDF', data: '2026-01-01', cartella: 'Atti' });
+    migraResto(db, {
+      pratiche: [
+        { id: 'p1', nome: 'Paini', cliente: 'Da definire', ambito: 'Lavoro', documenti: 0, aggiornataIl: '2026-11-07T10:00:00.000Z', cartellaPercorso: null },
+        { id: 'p2', nome: 'Vuota', cliente: 'X', ambito: 'Civile', documenti: 0, aggiornataIl: '2026-11-07T10:00:00.000Z', cartellaPercorso: null },
+      ],
+      documenti: { p1: [doc('a'), doc('b'), doc('c')] },
+    } as never);
+    const { entita } = new Host(db, new MotoreFinto()).richiedi({ tipo: 'snapshot.entita' }) as { entita: SnapshotEntita };
+    expect(entita.pratiche.map((p) => [p.nome, p.documenti])).toEqual([
+      ['Paini', 3],
+      ['Vuota', 0],
+    ]);
+  });
+});
