@@ -1,4 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+// I file arrivano già cifrati dal desktop (src/core/cifraturaArchivio.ts):
+// qui si controlla solo che lo siano e che siano arrivati interi.
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, rm } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -30,7 +32,7 @@ export function preparaDb(db: DatabaseSync): void {
   db.exec(`CREATE TABLE IF NOT EXISTS archivio_file (
     chiave TEXT PRIMARY KEY,
     dimensione INTEGER NOT NULL,
-    sha256 TEXT NOT NULL,
+    impronta TEXT NOT NULL,
     aggiornato_il TEXT NOT NULL
   )`);
 }
@@ -64,7 +66,7 @@ export class Archivio {
   }
 
   async elenco(): Promise<ElencoRemoto> {
-    const file = this.o.db.prepare('SELECT chiave, dimensione, sha256 FROM archivio_file ORDER BY chiave').all() as unknown as ElencoRemoto['file'];
+    const file = this.o.db.prepare('SELECT chiave, dimensione, impronta FROM archivio_file ORDER BY chiave').all() as unknown as ElencoRemoto['file'];
     return { file, usati: this.usati(), limite: await this.o.limite() };
   }
 
@@ -104,10 +106,10 @@ export class Archivio {
 
   private async carica(chiave: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
     const dimensione = Number(req.headers['content-length']);
-    const atteso = String(req.headers['x-sha256'] ?? '');
+    const impronta = String(req.headers['x-impronta'] ?? '');
     if (!Number.isSafeInteger(dimensione) || dimensione < 0) return rispondi(res, 411, { errore: 'Dimensione del file mancante.' });
     if (dimensione > MAX_FILE) return rispondi(res, 413, { errore: 'File troppo grande per il server privato (massimo 2 GB).' });
-    if (!/^[0-9a-f]{64}$/.test(atteso)) return rispondi(res, 400, { errore: 'Impronta del file mancante.' });
+    if (!/^[0-9a-f]{64}$/.test(impronta)) return rispondi(res, 400, { errore: 'Impronta del file mancante.' });
 
     // Spazio: conta il file che si sostituisce.
     const limite = await this.o.limite();
@@ -119,19 +121,23 @@ export class Archivio {
     const finale = this.percorso(chiave);
     const temporaneo = `${finale}.${randomBytes(6).toString('hex')}.parziale`;
     await mkdir(dirname(finale), { recursive: true, mode: 0o700 });
-    const h = createHash('sha256');
     let ricevuti = 0;
+    let inizio = Buffer.alloc(0);
     const conta = new Transform({
       transform(pezzo: Buffer, _enc, cb) {
+        // Un file in chiaro non deve mai finire sul server.
+        if (inizio.length < 4) {
+          inizio = Buffer.concat([inizio, pezzo]).subarray(0, 4);
+          if (inizio.length === 4 && inizio.toString('latin1') !== 'JRA1') return cb(new Error('file non cifrato'));
+        }
         ricevuti += pezzo.length;
         if (ricevuti > dimensione) return cb(new Error('troppi byte'));
-        h.update(pezzo);
         cb(null, pezzo);
       },
     });
     try {
       await pipeline(req, conta, createWriteStream(temporaneo, { mode: 0o600 }));
-      if (ricevuti !== dimensione || h.digest('hex') !== atteso) throw new Error('file arrivato incompleto');
+      if (ricevuti !== dimensione || inizio.toString('latin1') !== 'JRA1') throw new Error('file arrivato incompleto');
       await rename(temporaneo, finale);
     } catch {
       await rm(temporaneo, { force: true });
@@ -140,10 +146,10 @@ export class Archivio {
     }
     this.o.db
       .prepare(
-        `INSERT INTO archivio_file (chiave, dimensione, sha256, aggiornato_il) VALUES (?, ?, ?, ?)
-         ON CONFLICT(chiave) DO UPDATE SET dimensione = excluded.dimensione, sha256 = excluded.sha256, aggiornato_il = excluded.aggiornato_il`,
+        `INSERT INTO archivio_file (chiave, dimensione, impronta, aggiornato_il) VALUES (?, ?, ?, ?)
+         ON CONFLICT(chiave) DO UPDATE SET dimensione = excluded.dimensione, impronta = excluded.impronta, aggiornato_il = excluded.aggiornato_il`,
       )
-      .run(chiave, dimensione, atteso, (this.o.orologio ?? (() => new Date().toISOString()))());
+      .run(chiave, dimensione, impronta, (this.o.orologio ?? (() => new Date().toISOString()))());
     this.o.onCambio?.();
     rispondi(res, 200, { ok: true });
   }

@@ -1,12 +1,12 @@
 # JarAI Server per uno studio. Un progetto compose per studio:
 #   cd /srv/jarai/<studio> && docker compose -p jarai-<studio> up -d
 #
-# ATTENZIONE: l'immagine jarai-server non esiste ancora (arriva con il passo
-# "JarAI Server" del piano in docs/eventstore-protocollo.md). Questo file
-# fissa da subito volumi, rete e limiti, così il server è pronto.
+# L'immagine si costruisce sul server con deploy/scripts/costruisci-server.sh
+# (jarai-server:latest). Oggi contiene l'archivio cifrato delle pratiche
+# (Server privato); l'host con l'assistente arriverà nella stessa immagine.
 services:
   jarai:
-    image: ${JARAI_IMAGE:-ghcr.io/javierjara/jarai-server:latest}
+    image: ${JARAI_IMAGE:-jarai-server:latest}
     container_name: jarai-${STUDIO}
     restart: unless-stopped
     env_file: .env

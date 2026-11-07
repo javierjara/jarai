@@ -3,8 +3,10 @@
 
 export interface FileRemoto {
   chiave: string;
+  /** Byte sul server (file cifrato). */
   dimensione: number;
-  sha256: string;
+  /** Impronta opaca del contenuto (HMAC con la chiave dello studio). */
+  impronta: string;
 }
 
 export interface ElencoRemoto {

@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { Readable } from 'node:stream';
+import { cifra, dimensioneCifrata, improntaOpaca } from './cifraturaArchivio';
 import type { Database } from './db';
 import type { ElencoRemoto, StatoSincronizzazione } from '../shared/serverPrivato';
 
@@ -100,11 +101,16 @@ export class ClienteArchivio {
     return (await this.chiama('/sync/elenco')).json() as Promise<ElencoRemoto>;
   }
 
-  async carica(chiave: string, percorso: string, sha256: string, dimensione: number): Promise<void> {
+  /** Carica il file cifrato con la chiave dello studio: il server non lo può leggere. */
+  async carica(chiave: string, percorso: string, impronta: string, dimensione: number, chiaveStudio: Uint8Array): Promise<void> {
     await this.chiama(`/sync/file/${chiave}`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/octet-stream', 'content-length': String(dimensione), 'x-sha256': sha256 },
-      body: Readable.toWeb(createReadStream(percorso)) as ReadableStream,
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-length': String(dimensioneCifrata(dimensione)),
+        'x-impronta': impronta,
+      },
+      body: Readable.toWeb(createReadStream(percorso).pipe(cifra(chiaveStudio))) as ReadableStream,
       // Node vuole duplex per i corpi in streaming.
       ...({ duplex: 'half' } as object),
     });
@@ -117,6 +123,8 @@ export class ClienteArchivio {
 
 interface OpzioniSincronizzatore {
   cliente: ClienteArchivio;
+  /** Chiave dello studio (32 byte): resta su questo computer. */
+  chiave: Uint8Array;
   locali: () => FileLocale[];
   onStato: (stato: StatoSincronizzazione) => void;
   orologio?: () => string;
@@ -173,7 +181,7 @@ export class Sincronizzatore {
 
       // Cosa cambia: impronte dei file locali (solo dei modificati).
       let mancanti = 0;
-      const daCaricare: Array<{ chiave: string; percorso: string; sha256: string; dimensione: number }> = [];
+      const daCaricare: Array<{ chiave: string; percorso: string; impronta: string; dimensione: number }> = [];
       for (const l of locali) {
         let info;
         try {
@@ -191,7 +199,8 @@ export class Sincronizzatore {
         }
         this.impronte.set(l.percorso, { dimensione: info.size, modificato: info.mtimeMs, sha256 });
         const r = remoti.get(l.chiave);
-        if (!r || r.sha256 !== sha256) daCaricare.push({ chiave: l.chiave, percorso: l.percorso, sha256, dimensione: info.size });
+        const opaca = improntaOpaca(this.o.chiave, sha256);
+        if (!r || r.impronta !== opaca) daCaricare.push({ chiave: l.chiave, percorso: l.percorso, impronta: opaca, dimensione: info.size });
       }
       const chiaviLocali = new Set(locali.map((l) => l.chiave));
       const daEliminare = remoto.file.filter((f) => !chiaviLocali.has(f.chiave));
@@ -204,7 +213,7 @@ export class Sincronizzatore {
       for (let i = 0; i < daCaricare.length; i++) {
         this.imposta({ tipo: 'in_corso', fatti: i, totale: daCaricare.length, byteFatti, byteTotali });
         const f = daCaricare[i];
-        await this.o.cliente.carica(f.chiave, f.percorso, f.sha256, f.dimensione);
+        await this.o.cliente.carica(f.chiave, f.percorso, f.impronta, f.dimensione, this.o.chiave);
         byteFatti += f.dimensione;
       }
 

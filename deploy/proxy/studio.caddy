@@ -3,8 +3,9 @@
 #      docker exec caddy-caddy-1 caddy reload --config /etc/caddy/Caddyfile
 molfino.jarai.botcom.it {
 	encode zstd gzip
+	# Come MAX_FILE di src/server/archivio.ts (file cifrati fino a 2 GB).
 	request_body {
-		max_size 200MB
+		max_size 2100MB
 	}
 	reverse_proxy jarai-molfino:8787
 	header {
