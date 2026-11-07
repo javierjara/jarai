@@ -95,6 +95,14 @@ const registraErrore = (contesto: string, dettaglio: string) => console.error(`[
 // DeJure con Chromium headless (nell'immagine), profilo in RAM.
 const chromium = process.env.JARAI_CHROMIUM ?? (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : null);
 const dejure = chromium ? new DejureServer({ eseguibile: chromium, cartella: ram, registraErrore }) : null;
+if (dejure) {
+  const verifica = () =>
+    void dejure.verificaAccesso().then((ok) => {
+      if (ok === false) console.error('[dejure] DeJure rifiuta i collegamenti da questo server (403): strumenti DeJure disattivati');
+    });
+  verifica();
+  setInterval(verifica, 60 * 60_000).unref();
+}
 const studio = new StudioServer({
   cartellaPratiche: pratiche,
   cartellaDati: dati,

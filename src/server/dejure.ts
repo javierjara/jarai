@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser, Page } from 'puppeteer-core';
-import { ClienteDejure, type CredenzialiDejure, type PaginaWeb } from '../core/dejure';
+import { BASE_DEJURE, ClienteDejure, ErroreDejure, type CredenzialiDejure, type PaginaWeb } from '../core/dejure';
 
 // DeJure per l'assistente di riserva (JarAI Server): lo stesso codice del
 // computer (src/core/dejure.ts) su un Chromium headless nel container.
@@ -49,8 +49,26 @@ export class DejureServer {
     if (prima && prima.utente !== credenziali?.utente) void this.chiudi();
   }
 
+  /** Credenziali presenti e sito che accetta questo server (vedi verificaAccesso). */
   get disponibile(): boolean {
-    return !!this.credenziali;
+    return !!this.credenziali && this.accettato !== false;
+  }
+
+  private accettato: boolean | null = null;
+
+  /**
+   * DeJure rifiuta (403) i collegamenti da alcuni indirizzi, per esempio
+   * quelli dei datacenter: se rifiuta questo server, l'assistente non riceve
+   * gli strumenti DeJure. Una sola richiesta alla pagina iniziale, senza login.
+   */
+  async verificaAccesso(): Promise<boolean | null> {
+    try {
+      const r = await fetch(`${this.o.base ?? BASE_DEJURE}/`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+      this.accettato = r.status !== 403;
+    } catch {
+      this.accettato = null; // rete assente: si riprova, intanto non si esclude
+    }
+    return this.accettato;
   }
 
   /** Dimentica credenziali e sessione DeJure. */
@@ -134,18 +152,27 @@ export class DejureServer {
   }
 }
 
+export const BLOCCATO =
+  "DeJure non accetta collegamenti dal server dello studio. Per la giurisprudenza su DeJure serve il computer dello studio acceso: dillo all'avvocato.";
+
 // Chromium può scrivere nel profilo ancora per un attimo dopo la chiusura.
 const cancella = (cartella: string) => rm(cartella, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
 
 export function paginaPuppeteer(pagina: Page): PaginaWeb {
   return {
     carica: async (url) => {
+      let risposta;
       try {
-        await pagina.goto(url, { waitUntil: 'load', timeout: CARICAMENTO_MS });
+        risposta = await pagina.goto(url, { waitUntil: 'load', timeout: CARICAMENTO_MS });
       } catch (err) {
         // Come sul computer: le SPA annullano il primo caricamento con un
         // redirect interno; una pagina lenta si controlla dopo, dal contenuto.
         if (!/ERR_ABORTED|frame was detached|Navigation timeout/i.test(String(err))) throw err;
+      }
+      // DeJure rifiuta i collegamenti da alcuni indirizzi (datacenter): lo si
+      // dice subito, invece di aspettare una pagina che non arriverà.
+      if (risposta?.status() === 403) {
+        throw new ErroreDejure(BLOCCATO);
       }
     },
     valuta: <T>(codice: string) => pagina.evaluate(codice) as Promise<T>,

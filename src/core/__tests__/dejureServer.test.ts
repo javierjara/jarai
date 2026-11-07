@@ -51,6 +51,8 @@ describe.skipIf(!existsSync(CHROME))('DeJure sul server (Chromium headless)', ()
     expect(sentenza.testo).toBe('FATTO: il ricorrente cadeva.\n\nDIRITTO: il ricorso è infondato.');
 
     expect((await d.cliente.cerca('niente da trovare', 5)).risultati).toEqual([]);
+    // Indirizzo del server rifiutato da DeJure (403): messaggio chiaro, subito.
+    await expect(d.cliente.cerca('bloccato', 5)).rejects.toThrow('DeJure non accetta collegamenti dal server dello studio.');
 
     await d.dimentica();
     expect(d.disponibile).toBe(false);
@@ -66,4 +68,16 @@ describe.skipIf(!existsSync(CHROME))('DeJure sul server (Chromium headless)', ()
     await expect(d.cliente.cerca('art. 2051', 5)).rejects.toThrow('DeJure non ha accettato utente e password.');
     await d.dimentica();
   }, 120_000);
+
+  it('sito che rifiuta il server: strumenti DeJure non disponibili', async () => {
+    const d = new DejureServer({ eseguibile: CHROME, cartella, base });
+    d.imposta({ utente: UTENTE, password: PASSWORD });
+    expect(await d.verificaAccesso()).toBe(true);
+    expect(d.disponibile).toBe(true);
+    finto.blocca(true);
+    expect(await d.verificaAccesso()).toBe(false);
+    expect(d.disponibile).toBe(false);
+    finto.blocca(false);
+    await d.dimentica();
+  });
 });

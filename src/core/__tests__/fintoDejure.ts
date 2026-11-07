@@ -16,8 +16,9 @@ const LOGIN = pagina(`<form onsubmit="return false">
       .then((r) => r.ok ? (top.location.href = '/') : (document.getElementById('esito').textContent = 'Credenziali errate'))">Login</button>
   <p id="esito"></p></form>`);
 
-export function fintoDejure(): { server: Server; userAgent: () => string; consultazioni: () => number } {
+export function fintoDejure(): { server: Server; userAgent: () => string; consultazioni: () => number; blocca: (si: boolean) => void } {
   let ua = '';
+  let bloccato = false;
   let consultazioni = 0;
   const collegato = (req: IncomingMessage) => /(?:^|;\s*)s=ok/.test(req.headers.cookie ?? '');
   const server = createServer((req, res) => {
@@ -34,6 +35,7 @@ export function fintoDejure(): { server: Server; userAgent: () => string; consul
       });
       return;
     }
+    if (bloccato || url.searchParams.get('searchText')?.includes('bloccato')) return res.writeHead(403, { 'content-type': 'text/html' }).end('<title>403 Forbidden</title>');
     if (url.pathname === '/logingfl/Login') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(LOGIN);
     if (!collegato(req)) return html(`${INTESTAZIONE_FUORI}<main>Benvenuto</main>`);
     if (url.pathname === '/') return html(`<input placeholder="Cerca massime e sentenze">`);
@@ -60,5 +62,5 @@ export function fintoDejure(): { server: Server; userAgent: () => string; consul
     }
     res.writeHead(404).end();
   });
-  return { server, userAgent: () => ua, consultazioni: () => consultazioni };
+  return { server, userAgent: () => ua, consultazioni: () => consultazioni, blocca: (si) => (bloccato = si) };
 }
