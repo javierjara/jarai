@@ -1,5 +1,6 @@
 import { readFile, readdir, rm, rename, mkdir, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { generaDocxBuffer } from '../core/bozzaDocx';
 import { cifraTutto } from '../core/cifraturaArchivio';
 import { apriDatabase, inTransazione, type Database } from '../core/db';
 import { EventStore } from '../core/eventStore';
@@ -195,7 +196,15 @@ export class StudioServer {
         return c ? messaggiVisibili(c) : [];
       },
     };
-    host = new Host(db, this.o.creaMotore(contesto), { orologio: this.o.orologio, registraErrore: this.o.registraErrore });
+    host = new Host(db, this.o.creaMotore(contesto), {
+      orologio: this.o.orologio,
+      registraErrore: this.o.registraErrore,
+      // Word sì (stessa impaginazione del desktop); il PDF lo fa solo il computer (stampa di Chromium).
+      esportaBozza: async ({ contenuto }, formato) => {
+        if (formato !== 'word') throw new Error('PDF disponibile solo dal computer dello studio');
+        return generaDocxBuffer(contenuto);
+      },
+    });
     const aperto: Aperto = { chiave, host, db, pacchetto, daSalvare };
     host.abbona((e) => {
       if (e.seq === null || !e.conversazioneId) return;
