@@ -44,7 +44,6 @@ const PACCHETTO: PacchettoStudio = {
   pratiche: [{ id: 'p1', nome: 'Rossi c. Bianchi', cliente: 'Mario Rossi', ambito: 'Civile' }],
   documenti: { p1: [{ id: 'd1', nome: 'Contratto.pdf', tipo: 'Contratto', cartella: 'Contratti', data: '2026-03-03', percorso: '/x/Contratto.pdf' }] },
   memorie: { p1: { fatti: { giudice: { valore: 'Tribunale di Genova' } }, schede: {} } },
-  dejure: null,
 };
 
 async function prepara() {
@@ -122,7 +121,6 @@ describe('assistente di riserva sul server privato', () => {
     const fonti = s.contesto().fonti('p1', PACCHETTO.documenti.p1);
     expect(await fonti.testo('d1')).toContain('12.400');
     expect(fonti.memoria).toMatchObject({ fatti: { giudice: { valore: 'Tribunale di Genova' } } });
-    expect(s.contesto().dejure).toBeNull();
     expect(s.motore().richieste.at(-1)).toMatchObject({ praticaId: 'p1', documenti: [{ id: 'd1' }] });
 
     s.motore().emetti('c1', { tipo: 'delta', testo: 'Euro ' });

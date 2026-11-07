@@ -4,12 +4,11 @@ import { z } from 'zod';
 // Integrazione DeJure (Lefebvre Giuffrè), indipendente dal browser che la
 // esegue. DeJure non offre un'API: JarAI apre il sito con le credenziali
 // dell'avvocato e ne legge le pagine di ricerca e di dettaglio come farebbe
-// lui. Il browser cambia:
-//  - sul computer, una finestra nascosta di Electron (src/main/dejure.ts);
-//  - sul server privato, un Chromium headless (src/server/dejure.ts), per
-//    l'assistente di riserva a computer spento.
-// Qui stanno login, ricerca, lettura e gli strumenti per Claude: stessi
-// selettori e stesse regole (una richiesta alla volta, tetto per domanda).
+// lui. Il browser è un'interfaccia (PaginaWeb):
+// oggi una finestra nascosta di Electron (src/main/dejure.ts). Non dal server
+// privato: DeJure rifiuta i collegamenti dagli indirizzi dei datacenter (403),
+// quindi la ricerca vale solo a computer dello studio acceso.
+// Qui stanno login, ricerca, lettura e gli strumenti per Claude.
 
 export const BASE_DEJURE = 'https://dejure.lefebvregiuffre.it';
 
@@ -76,18 +75,12 @@ export interface OpzioniClienteDejure {
   credenziali: () => Promise<CredenzialiDejure | null>;
   /** Messaggio quando mancano le credenziali (dipende da dove gira). */
   senzaCredenziali?: string;
-  /** Per le prove: un DeJure finto. */
-  base?: string;
 }
 
 export class ClienteDejure {
   private coda: Promise<unknown> = Promise.resolve();
 
-  private readonly base: string;
-
-  constructor(private readonly o: OpzioniClienteDejure) {
-    this.base = o.base ?? BASE_DEJURE;
-  }
+  constructor(private readonly o: OpzioniClienteDejure) {}
 
   // Una richiesta alla volta sulla stessa pagina: due ricerche in parallelo
   // si pesterebbero i piedi e sembrerebbero un uso anomalo.
@@ -99,13 +92,13 @@ export class ClienteDejure {
 
   /** Login esplicito (collegamento da Impostazioni): errore se non riesce. */
   accedi(cred: CredenzialiDejure): Promise<void> {
-    return this.inCoda(async () => eseguiLogin(await this.o.pagina(), cred, this.base));
+    return this.inCoda(async () => eseguiLogin(await this.o.pagina(), cred));
   }
 
   cerca(testo: string, massimo: number, categoria: CategoriaDejure = 'giurisprudenza'): Promise<RicercaDejure> {
     return this.inCoda(async () => {
       const p = await this.o.pagina();
-      const url = `${this.base}/ricerca?searchText=${encodeURIComponent(testo).replace(/%20/g, '+')}&categoria=${categoria}`;
+      const url = `${BASE_DEJURE}/ricerca?searchText=${encodeURIComponent(testo).replace(/%20/g, '+')}&categoria=${categoria}`;
       await this.apriDaCollegato(p, url);
 
       // I risultati arrivano dopo la pagina: si aspettano le schede, oppure la
@@ -153,7 +146,7 @@ export class ClienteDejure {
   leggi(id: string, testoIntegrale: boolean): Promise<DocumentoDejure> {
     return this.inCoda(async () => {
       const p = await this.o.pagina();
-      await this.apriDaCollegato(p, `${this.base}/dettaglio/${id}?categoria=giurisprudenza`);
+      await this.apriDaCollegato(p, `${BASE_DEJURE}/dettaglio/${id}?categoria=giurisprudenza`);
       const pronto = await attendi<boolean>(p, `!!document.querySelector('.titolo-dettaglio')`, 25_000);
       if (!pronto) throw new ErroreDejure('Non riesco ad aprire questo documento su DeJure.');
       await pausa(500);
@@ -218,7 +211,7 @@ export class ClienteDejure {
     if ((await statoAccesso(p)) === 'dentro') return;
     const cred = await this.o.credenziali();
     if (!cred) throw new ErroreDejure(this.o.senzaCredenziali ?? 'DeJure non è collegato. Collegalo da Impostazioni → Integrazioni.');
-    await eseguiLogin(p, cred, this.base);
+    await eseguiLogin(p, cred);
     await p.carica(url);
     if ((await statoAccesso(p)) !== 'dentro') {
       throw new ErroreDejure('Non riesco a restare collegato a DeJure. Ricollegalo da Impostazioni → Integrazioni.');
@@ -275,8 +268,8 @@ async function trovaFrameLogin(p: PaginaWeb, timeoutMs: number): Promise<ReturnT
   return null;
 }
 
-async function eseguiLogin(p: PaginaWeb, cred: CredenzialiDejure, base: string): Promise<void> {
-  await p.carica(`${base}/`);
+async function eseguiLogin(p: PaginaWeb, cred: CredenzialiDejure): Promise<void> {
+  await p.carica(`${BASE_DEJURE}/`);
   const stato = await statoAccesso(p);
   if (stato === 'dentro') return;
   if (stato !== 'fuori') throw new ErroreDejure('DeJure non risponde. Controlla la connessione e riprova.');

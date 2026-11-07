@@ -54,7 +54,7 @@ export async function testiDaSincronizzare(
 /** Il pacchetto dello studio per il server privato (src/shared/archivio.ts). */
 export function costruisciPacchetto(
   db: Database,
-  extra: { memorie: Record<string, unknown>; dejure: PacchettoStudio['dejure']; ora: string },
+  extra: { memorie: Record<string, unknown>; ora: string },
 ): PacchettoStudio {
   const e = leggiEntita(db, () => null);
   return {
@@ -69,7 +69,6 @@ export function costruisciPacchetto(
       ]),
     ),
     memorie: extra.memorie,
-    dejure: extra.dejure,
   };
 }
 

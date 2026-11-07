@@ -10,7 +10,6 @@ import type { Host } from '../core/host';
 import { createHash } from 'node:crypto';
 import { cifraTutto } from '../core/cifraturaArchivio';
 import { ClienteArchivio, costruisciPacchetto, fileDaSincronizzare, Sincronizzatore, testiDaSincronizzare, type StatoSincronizzazione } from '../core/sincronizzazione';
-import { credenzialiDejurePerServer } from './dejure';
 import { percorsoTestoIndicizzato } from './indice';
 import { leggiMemoria } from './memoriaPratica';
 import { registraErroreGrezzo } from './logger';
@@ -109,7 +108,7 @@ export function registraServerPrivato(db: Database, host: Host, getWindow: () =>
     const pratiche = (db.prepare('SELECT id FROM pratica WHERE eliminata_il IS NULL').all() as Array<{ id: string }>).map((r) => r.id);
     const memorie: Record<string, unknown> = {};
     for (const id of pratiche) memorie[id] = await leggiMemoria(id).catch(() => null);
-    const p = costruisciPacchetto(db, { memorie, dejure: await credenzialiDejurePerServer().catch(() => null), ora: '' });
+    const p = costruisciPacchetto(db, { memorie, ora: '' });
     const testo = JSON.stringify(p);
     const impronta = createHash('sha256').update(testo).digest('hex');
     if (impronta === ultimoPacchetto) return;

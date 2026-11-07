@@ -21,7 +21,7 @@ import { z } from 'zod';
 // Integrazione DeJure (Lefebvre Giuffrè). DeJure non offre un'API: JarAI
 // apre il sito in una finestra nascosta, con le credenziali dell'avvocato,
 // e ne legge le pagine di ricerca e di dettaglio come farebbe lui (la logica
-// è in src/core/dejure.ts, comune al server privato).
+// è in src/core/dejure.ts, indipendente dal browser).
 //
 // È un'integrazione che l'avvocato attiva da sé, accettando un'avvertenza
 // esplicita (Impostazioni → Integrazioni): la licenza d'uso DeJure (art. 4.4)
@@ -73,11 +73,6 @@ async function leggiStatoSalvato(): Promise<StatoSalvato | null> {
   } catch {
     return null;
   }
-}
-
-/** Per l'assistente di riserva sul server privato: credenziali solo se DeJure è collegato. */
-export async function credenzialiDejurePerServer(): Promise<Credenziali | null> {
-  return (await dejureAttiva()) ? leggiCredenziali() : null;
 }
 
 export async function statoDejure(): Promise<StatoDejure> {

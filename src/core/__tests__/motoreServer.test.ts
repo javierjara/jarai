@@ -69,28 +69,4 @@ describe('motore dell\'assistente di riserva', () => {
     expect(eventi).toEqual([{ tipo: 'errore', messaggio: 'Licenza JarAI scaduta.', scartaParziale: true }]);
     expect(promptConStoria([], 'ciao')).toBe('ciao');
   });
-
-  it('DeJure: strumenti e indicazioni solo se lo studio l\'ha collegato', async () => {
-    const visti: Array<{ prompt: string; options: Options }> = [];
-    let cliente: { cerca: () => Promise<never>; leggi: () => Promise<never> } | null = null;
-    const motore = new MotoreServer({
-      proxy: 'p',
-      licenza: 'l',
-      cartellaSessioni: '/tmp',
-      fonti: () => ({ documenti: [], testo: async () => null, memoria: null }),
-      storia: () => [],
-      dejure: () => cliente as never,
-      interroga: sdkFinto([{ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's' }], visti),
-    });
-    await motore.esegui(richiesta, () => undefined);
-    expect(visti[0].options.allowedTools).not.toContain('mcp__jarai-dejure__cerca_dejure');
-    expect(Object.keys(visti[0].options.mcpServers ?? {})).not.toContain('jarai-dejure');
-    expect(String(visti[0].options.systemPrompt)).not.toContain('DeJure');
-
-    cliente = { cerca: async () => Promise.reject(new Error('x')), leggi: async () => Promise.reject(new Error('x')) };
-    await motore.esegui({ ...richiesta, conversazioneId: 'c2' }, () => undefined);
-    expect(visti[1].options.allowedTools).toEqual(expect.arrayContaining(['mcp__jarai-dejure__cerca_dejure', 'mcp__jarai-dejure__leggi_dejure']));
-    expect(Object.keys(visti[1].options.mcpServers ?? {})).toContain('jarai-dejure');
-    expect(String(visti[1].options.systemPrompt)).toContain('cerca_dejure');
-  });
 });

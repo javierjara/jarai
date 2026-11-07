@@ -55,8 +55,8 @@ export interface PacchettoStudio {
   documenti: Record<string, Array<{ id: string; nome: string; tipo: string; cartella: string; pagine?: number; data: string; percorso?: string }>>;
   /** Memoria della pratica (fatti e schede dei documenti), per id della pratica. */
   memorie: Record<string, unknown>;
-  /** Credenziali DeJure dell'avvocato, se ha collegato DeJure. */
-  dejure: { utente: string; password: string } | null;
+  // Niente credenziali DeJure: DeJure rifiuta i collegamenti dal server
+  // (403 dal suo bilanciatore), quindi lo si usa solo dal computer acceso.
 }
 
 export const FORMATO_CHIAVE = /^[0-9a-f]{24}\/[0-9a-f]{24}(\.[a-z0-9]{1,7})?$/;

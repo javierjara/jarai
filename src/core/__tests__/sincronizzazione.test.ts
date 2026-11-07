@@ -286,14 +286,15 @@ describe('pacchetto e testi per l\'assistente di riserva', () => {
     const testi = await testiDaSincronizzare(db, async (p) => (p === pdf ? indice : null));
     expect(testi).toEqual([{ chiave: chiaveTesto('p1', 'd1'), percorso: indice }]);
 
-    const p = costruisciPacchetto(db, { memorie: { p1: { fatti: {}, schede: {} } }, dejure: { utente: 'avv', password: 'segreta' }, ora: 'adesso' });
+    const p = costruisciPacchetto(db, { memorie: { p1: { fatti: {}, schede: { d1: { nome: 'Contratto', testo: 'scheda segreta' } } } }, ora: 'adesso' });
     expect(p.pratiche.map((x) => x.nome)).toEqual(['Rossi c. Bianchi']);
     expect(p.documenti.p1.map((d) => d.id)).toEqual(['d1', 'd2']);
     await new ClienteArchivio(base, LICENZA).caricaPacchetto(await cifraTutto(CHIAVE, Buffer.from(JSON.stringify(p))));
     const sulServer = readFileSync(archivio.percorsoPacchetto());
     expect(sulServer.includes(Buffer.from('segreta'))).toBe(false);
     expect(sulServer.includes(Buffer.from('Rossi'))).toBe(false);
-    expect(JSON.parse(Buffer.from(decifraArchivio(CHIAVE, sulServer)).toString()).dejure.password).toBe('segreta');
+    expect(JSON.parse(Buffer.from(decifraArchivio(CHIAVE, sulServer)).toString()).memorie.p1.schede.d1.testo).toBe('scheda segreta');
+    expect(p).not.toHaveProperty('dejure');
     expect(existsSync(join(server, 'pacchetto.jra'))).toBe(true);
 
     // Un pacchetto in chiaro viene rifiutato.

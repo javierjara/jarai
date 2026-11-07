@@ -45,8 +45,6 @@ export interface OpzioniStudio {
 export interface ContestoMotore {
   fonti: (praticaId: string | null, documenti: Array<{ id: string; nome: string; cartella: string }>) => FontiStudio;
   storia: (conversazioneId: string) => ReturnType<typeof messaggiVisibili>;
-  /** Credenziali DeJure dal pacchetto (null se l'avvocato non l'ha collegato): solo in memoria. */
-  dejure: PacchettoStudio['dejure'];
 }
 
 interface Aperto {
@@ -197,7 +195,6 @@ export class StudioServer {
         const c = host.conversazione(id);
         return c ? messaggiVisibili(c) : [];
       },
-      dejure: pacchetto.dejure ?? null,
     };
     host = new Host(db, this.o.creaMotore(contesto), {
       orologio: this.o.orologio,
