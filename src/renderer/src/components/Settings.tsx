@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Studio } from '../types';
 import CardSitoStudio from './CardSitoStudio';
 import CardTelefono from './CardTelefono';
+import CardServer from './server/CardServer';
 
 interface Props {
   studio: Studio;
@@ -290,6 +291,8 @@ export default function Settings({ studio, onSalvaStudio, conStudioDigitale = fa
 
 
           <CardTelefono />
+
+          <CardServer />
 
           {/* Integrazioni */}
           <div className="s-card">

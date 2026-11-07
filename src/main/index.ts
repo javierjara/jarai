@@ -6,6 +6,7 @@ import { registraAnteprimaDocumenti } from './documentPreview';
 import { registraCollegamentoClaude } from './claudeIpc';
 import { registraPersistenza } from './store';
 import { avviaHost } from './hostDesktop';
+import { registraServerPrivato } from './serverPrivato';
 import { registraTelefono } from './telefono';
 import { registraBozze } from './bozze';
 import { registraTrascrizione } from './trascrizione';
@@ -166,6 +167,7 @@ app.whenReady().then(async () => {
   const { host, db, conversazioniNelDatabase } = await avviaHost(() => mainWindow);
   registraPersistenza(conversazioniNelDatabase);
   registraTelefono(db, host, () => mainWindow);
+  registraServerPrivato(db, host, () => mainWindow);
   registraBozze(() => mainWindow);
   registraTrascrizione(() => mainWindow);
   registraAudioSetup(() => mainWindow);

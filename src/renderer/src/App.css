@@ -263,6 +263,29 @@ a { color: inherit; }
 }
 .privacy-pill-sidebar .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--sage); flex-shrink: 0; }
 
+/* Server privato: indicatore nella barra e scheda nelle Impostazioni */
+.server-pill {
+  width: 100%; display: flex; align-items: center; gap: 7px; margin-bottom: 2px;
+  padding: 6px 10px; border-radius: 7px; text-align: left;
+  font-family: var(--mono); font-size: 10px; color: oklch(0.72 0.004 85);
+  transition: background .12s, color .12s;
+}
+.server-pill:hover { background: oklch(1 0 0 / .06); color: oklch(0.86 0.004 85); }
+.server-pill .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--faint); }
+.server-pill.ok .dot { background: var(--sage); }
+.server-pill.attivo .dot { background: var(--amber); animation: server-pulsa 1.2s ease-in-out infinite; }
+.server-pill.errore .dot { background: var(--oxblood); }
+.server-pill.errore { color: oklch(0.78 0.08 25); }
+@keyframes server-pulsa { 50% { opacity: .3; } }
+.server-dot-attivo { animation: server-pulsa 1.2s ease-in-out infinite; }
+.server-stato .v { display: flex; flex-direction: column; gap: 2px; font-family: var(--sans); font-size: 12.5px; }
+.server-dettaglio { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.server-barra { height: 5px; border-radius: 3px; background: var(--paper-2); border: 1px solid var(--line); overflow: hidden; margin: 2px 0 8px; }
+.server-barra > div { height: 100%; background: var(--ink); border-radius: 3px; transition: width .3s; }
+.server-barra.piena > div { background: var(--oxblood); }
+.server-nota { margin: 4px 0 6px; padding: 10px 12px; border-radius: 8px; background: var(--amber-soft); color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+.server-nota strong { color: var(--ink); font-weight: 600; }
+
 /* ─── Topbar / page head ─────────────────────────────────── */
 .page-head {
   display: flex; align-items: flex-end; justify-content: space-between;

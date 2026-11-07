@@ -124,9 +124,9 @@ export interface OpzioniHost {
   /**
    * Dove sta davvero il file di un documento. Sul desktop è il percorso
    * registrato; su JarAI Server le cartelle delle pratiche sono altrove
-   * (es. /pratiche) e il server lo traduce.
+   * (es. /pratiche/<chiaveFile>) e il server lo traduce.
    */
-  risolviPercorso?: (percorso: string) => string;
+  risolviPercorso?: (percorso: string, documento: { praticaId: string; documentoId: string }) => string;
 }
 
 export interface Origine {
@@ -159,7 +159,7 @@ export class Host {
   private readonly nuovoId: () => string;
   private readonly registraErrore: (contesto: string, dettaglio: string) => void;
   private readonly esportaBozza: OpzioniHost['esportaBozza'];
-  private readonly risolviPercorso: (percorso: string) => string;
+  private readonly risolviPercorso: NonNullable<OpzioniHost['risolviPercorso']>;
   private elenco: ProiezioneElenco = ELENCO_VUOTO;
   private readonly cache = new Map<string, ProiezioneConversazione>();
   private readonly abbonati = new Set<(evento: Evento) => void>();
@@ -268,7 +268,7 @@ export class Host {
     if (!doc.percorso) return { ok: false, errore: 'Questo documento non ha un file sul computer.' };
     let file: FileHandle | null = null;
     try {
-      const percorso = this.risolviPercorso(doc.percorso);
+      const percorso = this.risolviPercorso(doc.percorso, { praticaId: r.praticaId, documentoId: r.documentoId });
       file = await open(percorso, 'r');
       const { size } = await file.stat();
       const da = Math.min(r.da, size);

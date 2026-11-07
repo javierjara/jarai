@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Conversazione, MainView, Pratica, Studio } from '../types';
 import { ChevronIcon, DownloadIcon, FolderIcon, GlobeIcon, HistoryIcon, HomeIcon, SettingsIcon } from './icons';
+import IndicatoreServer from './server/IndicatoreServer';
 
 interface Props {
   currentView: MainView;
@@ -173,6 +174,7 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-footer">
+        <IndicatoreServer onApri={() => onNavigate('impostazioni')} />
         <div className="privacy-pill-sidebar">
           <span className="dot" />
           Locale · cifrata · GDPR

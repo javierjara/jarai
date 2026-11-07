@@ -8,6 +8,14 @@ interface StatoTelefono {
 }
 // Solo tipi: niente codice di src/shared nel preload (resta minimo).
 import type { Busta, Evento } from '../shared/protocollo';
+import type { StatoSincronizzazione } from '../shared/serverPrivato';
+
+// Stessa forma di StatoServerPrivato in src/main/serverPrivato.ts.
+interface StatoServerPrivato {
+  attivo: boolean;
+  url: string | null;
+  stato: StatoSincronizzazione;
+}
 
 // Duplicate (non importate) dai tipi renderer con lo stesso nome: preload e
 // renderer sono due programmi TypeScript separati (tsconfig.node.json vs
@@ -328,6 +336,17 @@ const jarai = {
       const listener = () => callback();
       ipcRenderer.on('telefono:cambio', listener);
       return () => ipcRenderer.removeListener('telefono:cambio', listener);
+    },
+  },
+
+  // "Server privato" (src/main/serverPrivato.ts).
+  server: {
+    stato: (): Promise<StatoServerPrivato> => ipcRenderer.invoke('server:stato'),
+    sincronizza: (): Promise<StatoServerPrivato> => ipcRenderer.invoke('server:sincronizza'),
+    onCambio: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('server:cambio', listener);
+      return () => ipcRenderer.removeListener('server:cambio', listener);
     },
   },
 

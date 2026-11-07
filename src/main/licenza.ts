@@ -41,6 +41,8 @@ export interface StatoLicenza {
   domandeMese?: number;
   /** Funzioni aggiuntive attivate dal CRM per lo studio (es. "studio_digitale"). */
   funzioni?: string[];
+  /** Server privato (JarAI Server) dello studio, impostato dal CRM. */
+  server?: { url: string; gb: number | null };
 }
 
 // Chiede lo stato al proxy (GET /v1/license): non passa da Claude e non
@@ -54,7 +56,15 @@ export async function statoLicenza(licenza?: string | null): Promise<StatoLicenz
       return { valida: false, messaggio: 'Licenza JarAI non valida, sospesa o scaduta.' };
     }
     if (!risposta.ok) return { valida: false, messaggio: 'Il servizio JarAI non risponde. Riprova tra poco.' };
-    const dati = (await risposta.json()) as { customerName: string; plan: string; monthlyLimit: number; count: number; features?: string[] };
+    const dati = (await risposta.json()) as {
+      customerName: string;
+      plan: string;
+      monthlyLimit: number;
+      count: number;
+      features?: string[];
+      serverUrl?: string | null;
+      serverGb?: number | null;
+    };
     return {
       valida: true,
       studio: dati.customerName,
@@ -62,6 +72,7 @@ export async function statoLicenza(licenza?: string | null): Promise<StatoLicenz
       domandeUsate: dati.count,
       domandeMese: dati.monthlyLimit,
       funzioni: Array.isArray(dati.features) ? dati.features : [],
+      ...(typeof dati.serverUrl === 'string' && dati.serverUrl ? { server: { url: dati.serverUrl, gb: dati.serverGb ?? null } } : {}),
     };
   } catch {
     return { valida: false, messaggio: 'Non riesco a raggiungere il servizio JarAI. Controlla la connessione.' };
