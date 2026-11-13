@@ -15,9 +15,8 @@ import { caricaDati, DATI_PATH } from './store';
 
 // L'host sul desktop (docs/eventstore-protocollo.md, passi 4 e 5): jarai.db
 // nella cartella dati dell'app, l'agente di agentRunner come Motore e la
-// finestra collegata via IPC. Conversazioni, pratiche, documenti e Studio
-// digitale passano tutti di qui. Solo la richiesta di idee usa ancora
-// claude:invia: è una chiamata singola, non una conversazione da tenere.
+// finestra collegata via IPC. Conversazioni, pratiche e documenti passano
+// tutti di qui.
 
 const DB_PATH = () => join(app.getPath('userData'), 'jarai.db');
 // Copia del JSON presa prima della migrazione: la via di ritorno.
@@ -146,10 +145,6 @@ function daEventoAgente(e: EventoAgente): EventoMotore | null {
       return { tipo: 'lavori', lavori: e.lavori };
     case 'bozza':
       return { tipo: 'bozza', titolo: e.titolo, contenuto: e.contenuto };
-    case 'articolo':
-      return { tipo: 'articolo', articolo: e.articolo };
-    case 'idee':
-      return { tipo: 'idee', idee: e.idee };
     case 'sessione':
       return { tipo: 'sessione', sessionId: e.sessionId };
     case 'completato':

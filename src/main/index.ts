@@ -13,7 +13,6 @@ import { registraTrascrizione } from './trascrizione';
 import { registraAudioSetup } from './audioSetup';
 import { registraAggiornamenti } from './aggiornamenti';
 import { registraDejure } from './dejure';
-import { registraSito } from './sito/ipc';
 
 // Schema privilegiato per il player audio delle pratiche (spec §6.2): il
 // renderer, sandboxato e senza accesso al filesystem, non può puntare un
@@ -175,7 +174,6 @@ app.whenReady().then(async () => {
   registraAudioSetup(() => mainWindow);
   registraAggiornamenti(() => mainWindow);
   registraDejure();
-  registraSito();
 
   createWindow();
 

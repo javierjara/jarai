@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Conversazione, MainView, Pratica, Studio } from '../types';
-import { ChevronIcon, DownloadIcon, FolderIcon, GlobeIcon, HistoryIcon, HomeIcon, SettingsIcon } from './icons';
+import { ChevronIcon, DownloadIcon, FolderIcon, HistoryIcon, HomeIcon, SettingsIcon } from './icons';
 import IndicatoreServer from './server/IndicatoreServer';
 
 interface Props {
@@ -13,7 +13,6 @@ interface Props {
   onNuovaConversazione: (praticaId: string) => void;
   onDeleteConversazione: (id: string) => void;
   aggiornamentoDisponibile?: boolean;
-  conStudioDigitale?: boolean;
 }
 
 const MAX_VISIBILI = 5;
@@ -28,7 +27,6 @@ export default function Sidebar({
   onNuovaConversazione,
   onDeleteConversazione,
   aggiornamentoDisponibile = false,
-  conStudioDigitale = false,
 }: Props) {
   const [aperte, setAperte] = useState<Set<string>>(new Set([pratiche[0]?.id]));
   const [espanseAll, setEspanseAll] = useState<Set<string>>(new Set());
@@ -72,9 +70,6 @@ export default function Sidebar({
         <NavBtn id="home" label="Fai una domanda" current={currentView} onNavigate={onNavigate} icon={<HomeIcon />} />
         <NavBtn id="storico" label="Storico" current={currentView} onNavigate={onNavigate} icon={<HistoryIcon />} />
         <NavBtn id="pratiche" label="Le mie pratiche" current={currentView} onNavigate={onNavigate} icon={<FolderIcon />} />
-        {conStudioDigitale && (
-          <NavBtn id="studio-digitale" label="Studio digitale" current={currentView} onNavigate={onNavigate} icon={<GlobeIcon />} />
-        )}
       </nav>
 
       <div className="nav-label">Pratiche</div>

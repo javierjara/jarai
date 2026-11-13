@@ -4,8 +4,6 @@ import ConversazioneView from './components/ConversazioneView';
 import StoricoView from './components/StoricoView';
 import PraticheView from './components/PraticheView';
 import Settings from './components/Settings';
-import StudioDigitaleView from './components/StudioDigitaleView';
-import { PREFERENZE_SITO_DEFAULT, useStudioDigitale } from './components/studio/useStudioDigitale';
 import { AVVOCATO_NOME, DOCUMENTI, PRATICHE, STUDIO_NOME } from './data/datiIniziali';
 import { caricaEntita, comando, useElenco } from './host';
 import { differenze, type StatoEntita } from './sincronizza';
@@ -36,27 +34,12 @@ export default function App() {
   const [homeKey, setHomeKey] = useState(0);
   const [pronto, setPronto] = useState(false);
   const [aggiornamentoDisponibile, setAggiornamentoDisponibile] = useState(false);
+  // Articoli, idee e preferenze dello Studio digitale di prima: la funzione
+  // ora è Botcom Digital Studio (webapp separata), ma i dati già salvati in jarai.db
+  // restano com'erano. Si caricano e si risalvano invariati, senza interfaccia.
   const [studioDigitale, setStudioDigitale] = useState<ConversazioneSito[]>([]);
-  // Funzioni aggiuntive attivate dal CRM sulla licenza (es. Studio digitale).
-  const [funzioni, setFunzioni] = useState<string[]>([]);
-  const conStudioDigitale = funzioni.includes('studio_digitale');
   const [ideeSito, setIdeeSito] = useState<Idea[]>([]);
-  const [preferenzeSito, setPreferenzeSito] = useState<PreferenzeSito>(PREFERENZE_SITO_DEFAULT);
-  // Risposte dell'assistente, idee e pubblicazioni programmate:
-  // gestite qui per non perderle fuori dalla sezione Studio digitale.
-  const studioDigitaleApi = useStudioDigitale({
-    attivo: pronto && conStudioDigitale,
-    setConversazioni: setStudioDigitale,
-    setIdee: setIdeeSito,
-    setPreferenze: setPreferenzeSito,
-  });
-
-  // All'avvio, e ogni volta che si esce dalle Impostazioni: lì si può aver
-  // appena attivato o cambiato la licenza.
-  useEffect(() => {
-    if (currentView === 'impostazioni') return;
-    void window.jarai.funzioni.attive(true).then(setFunzioni);
-  }, [currentView]);
+  const [preferenzeSito, setPreferenzeSito] = useState<PreferenzeSito>({ obiettivoSettimana: 1 });
 
   // Avviso aggiornamento (spec §12): un solo controllo silenzioso, con un
   // piccolo ritardo per non competere con l'avvio dell'app — chiedere "c'è
@@ -94,7 +77,7 @@ export default function App() {
       studio: salvato.studio ?? { nome: STUDIO_NOME, avvocato: AVVOCATO_NOME },
       studioDigitale: salvato.studioDigitale ?? [],
       ideeSito: salvato.ideeSito ?? [],
-      preferenzeSito: salvato.preferenzeSito ?? PREFERENZE_SITO_DEFAULT,
+      preferenzeSito: salvato.preferenzeSito ?? { obiettivoSettimana: 1 },
     };
     setPratiche(iniziale.pratiche);
     setDocumenti(iniziale.documenti);
@@ -363,22 +346,8 @@ export default function App() {
             onDeleteDocumento={eliminaDocumento}
           />
         );
-      case 'studio-digitale':
-        return conStudioDigitale ? (
-          <StudioDigitaleView
-            conversazioni={studioDigitale}
-            setConversazioni={setStudioDigitale}
-            idee={ideeSito}
-            setIdee={setIdeeSito}
-            preferenze={preferenzeSito}
-            setPreferenze={setPreferenzeSito}
-            api={studioDigitaleApi}
-            nomeStudio={studio.nome}
-            onVaiImpostazioni={() => navigate('impostazioni')}
-          />
-        ) : null;
       case 'impostazioni':
-        return <Settings studio={studio} onSalvaStudio={setStudio} conStudioDigitale={conStudioDigitale} />;
+        return <Settings studio={studio} onSalvaStudio={setStudio} />;
     }
   }
 
@@ -396,7 +365,6 @@ export default function App() {
         onNuovaConversazione={nuovaConversazione}
         onDeleteConversazione={eliminaConversazione}
         aggiornamentoDisponibile={aggiornamentoDisponibile}
-        conStudioDigitale={conStudioDigitale}
       />
       <main className="main-area">{renderView()}</main>
     </div>

@@ -2,7 +2,7 @@
   "name": "jarai",
   "productName": "jarai",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "description": "JarAI — l'assistente legale di Claude Code per lo studio, senza mai mostrare codice.",
   "author": "Studio",

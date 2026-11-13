@@ -1,7 +1,7 @@
 // Vocabolario vincolante (spec §1): questi tipi usano solo i nomi della
 // colonna "Nome in JarAI", mai i termini tecnici di T3 Code / Claude Code.
 
-export type MainView = 'home' | 'storico' | 'pratiche' | 'studio-digitale' | 'impostazioni';
+export type MainView = 'home' | 'storico' | 'pratiche' | 'impostazioni';
 
 export type StatoConversazione = 'in_corso' | 'attesa' | 'completata' | 'interrotta';
 

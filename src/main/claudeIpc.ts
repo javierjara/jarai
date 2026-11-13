@@ -2,29 +2,12 @@ import { ipcMain, type BrowserWindow } from 'electron';
 import { z } from 'zod';
 import { haChiave, leggiStatoCollegamento, rimuoviChiave, rimuoviStatoCollegamento, salvaChiave, salvaStatoCollegamento } from './claudeAuth';
 import { attivaLicenza, rimuoviLicenza, statoLicenza } from './licenza';
-import { fermaMessaggio, inviaMessaggio, verificaCollegamento } from './agentRunner';
+import { verificaCollegamento } from './agentRunner';
 import { annullaLogin, avviaLogin, disconnetti, inviaCodiceLogin } from './claudeLogin';
 import { leggiUso } from './usage';
 
 const chiaveSchema = z.string().min(10);
 const licenzaSchema = z.string().trim().min(10);
-const documentoRifSchema = z.object({
-  nome: z.string(),
-  percorso: z.string().optional(),
-  cartella: z.string(),
-  tipo: z.string(),
-  pagine: z.number().optional(),
-});
-const invioSchema = z.object({
-  conversazioneId: z.string().min(1),
-  modalita: z.enum(['pratica', 'studio-digitale']).optional(),
-  testo: z.string().min(1),
-  qualita: z.enum(['Standard', 'Massima']),
-  praticaId: z.string().min(1).optional(),
-  praticaNome: z.string().optional(),
-  documenti: z.array(documentoRifSchema).optional(),
-});
-const conversazioneIdSchema = z.string().min(1);
 const modalitaLoginSchema = z.enum(['console', 'claudeai']);
 const codiceLoginSchema = z.string().min(1);
 
@@ -69,22 +52,6 @@ export function registraCollegamentoClaude(getWindow: () => BrowserWindow | null
   ipcMain.handle('claude:stato-licenza', async () => statoLicenza());
 
   ipcMain.handle('claude:stato-chiave', async () => ({ presente: await haChiave() }));
-
-  ipcMain.handle('claude:invia', (_event, payloadInput: unknown) => {
-    const payload = invioSchema.parse(payloadInput);
-    const win = getWindow();
-    if (!win) return;
-    // Solo lo Studio digitale passa ancora di qui (fino al passo 5): le
-    // conversazioni delle pratiche vanno all'host (hostDesktop.ts).
-    void inviaMessaggio(payload, (evento) => {
-      if (!win.webContents.isDestroyed()) win.webContents.send('claude:evento', evento);
-    });
-  });
-
-  ipcMain.handle('claude:ferma', (_event, conversazioneIdInput: unknown) => {
-    const conversazioneId = conversazioneIdSchema.parse(conversazioneIdInput);
-    fermaMessaggio(conversazioneId);
-  });
 
   ipcMain.handle('claude:avvia-login', (_event, modalitaInput: unknown) => {
     const modalita = modalitaLoginSchema.parse(modalitaInput);

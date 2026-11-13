@@ -9,9 +9,6 @@ import { creaServerBozze, type EventoBozza } from './bozze';
 import { registraUso } from './usage';
 import { indicizzaInBackground } from './indice';
 import { creaServerDejure, dejureAttiva, PROMPT_DEJURE, STRUMENTI_DEJURE } from './dejure';
-import { creaServerSito, PROMPT_STUDIO_DIGITALE, STRUMENTI_SITO, type ArticoloProposto, type IdeaProposta } from './sito/strumenti';
-import { funzioneAttiva } from './licenza';
-import { FUNZIONE_STUDIO_DIGITALE } from './sito/ipc';
 
 // Prompt legale (spec §6.4). Le regole 1 e 4 (verificare che i documenti
 // citati esistano, citare sempre la fonte) presuppongono che l'assistente
@@ -52,8 +49,9 @@ messaggio normale: risulterebbe duplicato, la bozza si vede già nel pannello.`;
 
 type Qualita = 'Standard' | 'Massima';
 
-// "pratica": l'assistente legale di sempre. "studio-digitale": articoli per
-// il sito dello studio, con strumenti propri e nessun accesso alle pratiche.
+// "pratica": l'assistente legale. "studio-digitale" resta nel protocollo per
+// le conversazioni già salvate, ma lo Studio digitale ora è Botcom Digital Studio,
+// la webapp separata (repository jarai-studio): qui non si risponde più.
 type Modalita = 'pratica' | 'studio-digitale';
 
 export interface InvioPayload {
@@ -102,16 +100,6 @@ interface EventoLavori {
   conversazioneId: string;
   lavori: LavoroDocumento[];
 }
-interface EventoArticolo {
-  tipo: 'articolo';
-  conversazioneId: string;
-  articolo: ArticoloProposto;
-}
-interface EventoIdee {
-  tipo: 'idee';
-  conversazioneId: string;
-  idee: IdeaProposta[];
-}
 // Id della sessione dell'SDK, da salvare per riprendere la conversazione.
 interface EventoSessione {
   tipo: 'sessione';
@@ -125,9 +113,7 @@ export type EventoAgente =
   | EventoCompletato
   | EventoErrore
   | EventoBozzaPronta
-  | EventoLavori
-  | EventoArticolo
-  | EventoIdee;
+  | EventoLavori;
 
 // Traduzione delle attività (spec §5.5): il nome dello strumento non arriva
 // mai in chiaro all'avvocato, solo questa frase in italiano.
@@ -141,12 +127,6 @@ function attivitaPerStrumento(nomeStrumento: string): string {
   if (nomeStrumento.endsWith('__crea_bozza')) return 'Sto preparando la bozza…';
   if (nomeStrumento.endsWith('__cerca_dejure')) return 'Sto cercando giurisprudenza su DeJure…';
   if (nomeStrumento.endsWith('__leggi_dejure')) return 'Sto leggendo una pronuncia su DeJure…';
-  if (nomeStrumento.endsWith('__elenca_articoli_sito')) return 'Sto guardando gli articoli del sito…';
-  if (nomeStrumento.endsWith('__leggi_articolo_sito')) return 'Sto leggendo un articolo del sito…';
-  if (nomeStrumento.endsWith('__proponi_articolo')) return 'Sto preparando l\'articolo…';
-  if (nomeStrumento.endsWith('__proponi_idee')) return 'Sto preparando le idee…';
-  if (nomeStrumento.endsWith('__ricerche_google_sito')) return 'Sto guardando le ricerche su Google…';
-  if (nomeStrumento === 'WebSearch' || nomeStrumento === 'web_search') return 'Sto cercando novità online…';
   return 'Sto lavorando…';
 }
 
@@ -185,38 +165,6 @@ function promptDiSistema(soloPromptLegale: boolean, prompt: string): Options['sy
   if (!soloPromptLegale) return { type: 'preset', preset: 'claude_code', append: prompt };
   const oggi = new Date().toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   return `${prompt}\nOggi è ${oggi}.`;
-}
-
-// Studio digitale: prompt e strumenti propri. Nessuno strumento delle
-// pratiche (documenti, memoria, bozze, DeJure): un dato di un cliente non
-// può arrivare in un articolo destinato al pubblico. WebSearch serve per
-// le novità normative.
-async function opzioniStudioDigitale(
-  qualita: Qualita,
-  conversazioneId: string,
-  onArticolo: (articolo: ArticoloProposto) => void,
-  onIdee: (idee: IdeaProposta[]) => void,
-): Promise<Options> {
-  const abort = new AbortController();
-  abortControllers.set(conversazioneId, abort);
-  const conLicenza = (await leggiLicenza()) !== null;
-  const conChiave = !conLicenza && (await haChiave());
-  return {
-    model: modelloPer(qualita),
-    effort: effortPer(qualita),
-    maxBudgetUsd: conLicenza ? TETTO_USD_PER_DOMANDA[qualita] : undefined,
-    systemPrompt: promptDiSistema(conLicenza || conChiave, PROMPT_STUDIO_DIGITALE),
-    tools: ['WebSearch'],
-    mcpServers: { 'jarai-sito': creaServerSito(onArticolo, onIdee) },
-    allowedTools: ['WebSearch', ...STRUMENTI_SITO],
-    settingSources: [],
-    includePartialMessages: true,
-    maxTurns: 40,
-    resume: sessioniPerConversazione.get(conversazioneId),
-    abortController: abort,
-    pathToClaudeCodeExecutable: percorsoClaudeIntegrato() ?? undefined,
-    env: await ambienteClaude(randomUUID()),
-  };
 }
 
 async function opzioniBase(
@@ -304,41 +252,35 @@ function messaggioErroreItaliano(err: unknown): string {
   return 'Non riesco a raggiungere Claude. Controlla la connessione e riprova.';
 }
 
-// Gli eventi escono da emetti: verso l'host (conversazioni delle pratiche,
-// src/main/host.ts) o direttamente verso la finestra (Studio digitale, fino
-// al passo 5). Gli errori portano solo il motivo, in italiano: il testo
+// Gli eventi escono da emetti, verso l'host (src/main/hostDesktop.ts). Gli errori portano solo il motivo, in italiano: il testo
 // arrivato prima lo ricompone chi riceve (oggi lo si incollava qui ed
 // esso compariva due volte).
 export async function inviaMessaggio(payload: InvioPayload, emetti: (evento: EventoAgente) => void): Promise<void> {
   const { conversazioneId, testo, qualita, praticaId, documenti } = payload;
-  const studioDigitale = payload.modalita === 'studio-digitale';
   const invia = emetti;
+  if (payload.modalita === 'studio-digitale') {
+    invia({
+      tipo: 'errore',
+      conversazioneId,
+      messaggio: 'Lo Studio digitale non fa più parte di JarAI: articoli, idee e pubblicità sono in Botcom Digital Studio, la webapp dedicata: https://studio.botcom.it',
+    });
+    return;
+  }
   if (payload.resume) sessioniPerConversazione.set(conversazioneId, payload.resume);
 
   // Pratiche importate prima dell'indice, o file cambiati nel frattempo:
   // l'indicizzazione parte comunque, così le letture successive sono pronte.
-  if (!studioDigitale) indicizzaInBackground(documenti ?? []);
+  indicizzaInBackground(documenti ?? []);
 
   try {
-    if (studioDigitale && !(await funzioneAttiva(FUNZIONE_STUDIO_DIGITALE))) {
-      invia({ tipo: 'errore', conversazioneId, messaggio: 'Lo Studio digitale non è attivo per questa licenza JarAI.' });
-      return;
-    }
-    const options = studioDigitale
-      ? await opzioniStudioDigitale(
-          qualita,
-          conversazioneId,
-          (articolo) => invia({ tipo: 'articolo', conversazioneId, articolo }),
-          (idee) => invia({ tipo: 'idee', conversazioneId, idee }),
-        )
-      : await opzioniBase(
-          qualita,
-          conversazioneId,
-          praticaId,
-          documenti ?? [],
-          (bozza) => invia({ tipo: 'bozza', conversazioneId, titolo: bozza.titolo, contenuto: bozza.contenuto }),
-          (lavori) => invia({ tipo: 'lavori', conversazioneId, lavori }),
-        );
+    const options = await opzioniBase(
+      qualita,
+      conversazioneId,
+      praticaId,
+      documenti ?? [],
+      (bozza) => invia({ tipo: 'bozza', conversazioneId, titolo: bozza.titolo, contenuto: bozza.contenuto }),
+      (lavori) => invia({ tipo: 'lavori', conversazioneId, lavori }),
+    );
     for await (const message of query({ prompt: testo, options })) {
       if (message.type === 'stream_event') {
         const event = message.event;
