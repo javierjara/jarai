@@ -4,6 +4,7 @@ import { dirname, extname, join } from 'node:path';
 import mammoth from 'mammoth';
 import WordExtractor from 'word-extractor';
 import MsgReader from '@kenjiuno/msgreader';
+import PostalMime, { type Address } from 'postal-mime';
 import forge from 'node-forge';
 import Tesseract from 'tesseract.js';
 import { CARTELLA_ZIP_ESTRATTI } from './zip';
@@ -78,7 +79,203 @@ function rtfATesto(buffer: Buffer): string {
     .trim();
 }
 
-async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile: string, onPaginaOcr?: OnPaginaOcr): Promise<string> {
+// --- Email (.eml, .msg) ------------------------------------------------------
+//
+// Un .eml è un messaggio MIME: il corpo e gli allegati (foto, PDF, PEC
+// inoltrate) stanno codificati in base64 nello stesso file. Letto come testo
+// semplice diventava decine di migliaia di righe illeggibili che superavano il
+// limite di ogni lettura. Qui si estraggono intestazioni e corpo, e ogni
+// allegato passa dallo stesso estrattore degli altri documenti (OCR per le
+// foto, pdf-parse per i PDF, busta .p7m, email annidate come la postacert.eml
+// delle PEC).
+
+// Email dentro email (inoltri di inoltri, PEC): oltre questa profondità gli
+// allegati annidati vengono solo elencati.
+const MAX_PROFONDITA_EMAIL = 4;
+// Immagini incorporate nel corpo HTML (loghi, firme, icone social): sotto
+// questa dimensione non vale la pena di farne l'OCR. Le foto vere pesano
+// molto di più.
+const MIN_BYTE_IMMAGINE_INCORPORATA = 30_000;
+
+const ESTENSIONE_DA_MIME: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'doc',
+  'application/rtf': 'rtf',
+  'text/rtf': 'rtf',
+  'text/plain': 'txt',
+  'message/rfc822': 'eml',
+  'application/vnd.ms-outlook': 'msg',
+  'application/pkcs7-mime': 'p7m',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+};
+
+// Firme S/MIME del messaggio stesso (smime.p7s): niente da leggere.
+const MIME_FIRMA = new Set(['application/pkcs7-signature', 'application/x-pkcs7-signature']);
+
+function htmlATesto(html: string): string {
+  return html
+    .replace(/<(head|style|script)[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|li|h[1-6]|blockquote|table)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&amp;/gi, '&')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function formattaIndirizzi(indirizzi: Address[] | Address | undefined): string {
+  const lista = Array.isArray(indirizzi) ? indirizzi : indirizzi ? [indirizzi] : [];
+  return lista
+    .flatMap((a) => ('group' in a && a.group ? a.group : [a]))
+    .map((a) => (a.name && a.address ? `${a.name} <${a.address}>` : a.address || a.name))
+    .filter(Boolean)
+    .join(', ');
+}
+
+function formattaData(data: string | undefined): string | null {
+  if (!data) return null;
+  const d = new Date(data);
+  if (Number.isNaN(d.getTime())) return data;
+  return d.toLocaleString('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'short' });
+}
+
+interface AllegatoEmail {
+  nome: string;
+  contenuto: Buffer;
+  mime?: string;
+  incorporato?: boolean;
+}
+
+// Testo di un allegato, con le pagine dei PDF rinominate in "[pag. N]": i
+// marcatori "[Pagina N]" sono riservati ai PDF letti direttamente, altrimenti
+// un'email con due PDF allegati sembrerebbe un documento a pagine con i
+// numeri ripetuti.
+function estensioneAllegato(a: AllegatoEmail): string {
+  const ext = extname(a.nome).slice(1).toLowerCase();
+  if (ESTENSIONI_LEGGIBILI.has(ext) && !ESTENSIONI_AUDIO.has(ext)) return ext;
+  return ESTENSIONE_DA_MIME[a.mime ?? ''] ?? ext;
+}
+
+async function testoAllegati(allegati: AllegatoEmail[], profondita: number, onPaginaOcr?: OnPaginaOcr): Promise<string[]> {
+  const sezioni: string[] = [];
+  const totale = allegati.length;
+  for (const [i, a] of allegati.entries()) {
+    const ext = estensioneAllegato(a);
+    const titolo = `[Allegato ${i + 1} di ${totale}: ${a.nome}`;
+    let testo: string;
+    if (!ESTENSIONI_LEGGIBILI.has(ext) || ESTENSIONI_AUDIO.has(ext)) {
+      testo = '(formato non leggibile automaticamente)';
+    } else if ((ext === 'eml' || ext === 'msg') && profondita >= MAX_PROFONDITA_EMAIL) {
+      testo = '(email annidata troppo in profondità: non letta)';
+    } else {
+      try {
+        testo = (await estraiTestoDaBuffer(a.contenuto, ext, a.nome, onPaginaOcr, profondita + 1)).replace(/^\[Pagina (\d+)/gm, '[pag. $1');
+      } catch (err) {
+        testo = `(allegato non leggibile: ${err instanceof Error ? err.message : String(err)})`;
+      }
+    }
+    const tipo = ESTENSIONI_IMMAGINE.has(ext) ? ' — immagine, qui solo il testo da OCR' : ext === 'eml' || ext === 'msg' ? ' — email allegata' : '';
+    sezioni.push(`${titolo}${tipo}]\n${testo.trim() || '(vuoto)'}`);
+  }
+  return sezioni;
+}
+
+function componiEmail(intestazione: (string | null)[], corpo: string, sezioniAllegati: string[]): string {
+  return [
+    intestazione.filter(Boolean).join('\n'),
+    `[Testo dell'email]\n${corpo.trim() || '(nessun testo nel corpo dell\'email)'}`,
+    ...sezioniAllegati,
+  ].join('\n\n');
+}
+
+async function apriEml(buffer: Buffer) {
+  // forceRfc822Attachments: le email inoltrate come allegato (e la
+  // postacert.eml delle PEC) restano allegati distinti, letti a loro volta,
+  // invece di essere fuse nel corpo del messaggio esterno.
+  const email = await PostalMime.parse(buffer, { forceRfc822Attachments: true, attachmentEncoding: 'arraybuffer' });
+  const allegati: AllegatoEmail[] = [];
+  const saltati: string[] = [];
+  for (const a of email.attachments) {
+    const contenuto = Buffer.from(a.content as ArrayBuffer);
+    const nome = a.filename || `allegato senza nome (${a.mimeType})`;
+    if (MIME_FIRMA.has(a.mimeType.toLowerCase()) || /^smime\.p7s$/i.test(nome)) continue;
+    const incorporato = Boolean(a.related) || (a.disposition === 'inline' && !a.filename);
+    if (incorporato && a.mimeType.startsWith('image/') && contenuto.length < MIN_BYTE_IMMAGINE_INCORPORATA) {
+      saltati.push(nome);
+      continue;
+    }
+    allegati.push({ nome, contenuto, mime: a.mimeType.toLowerCase(), incorporato });
+  }
+  return { email, allegati, saltati };
+}
+
+async function emlATesto(buffer: Buffer, profondita: number, onPaginaOcr?: OnPaginaOcr): Promise<string> {
+  const { email, allegati, saltati } = await apriEml(buffer);
+  const corpo = email.text?.trim() ? email.text : email.html ? htmlATesto(email.html) : '';
+  const intestazione = [
+    email.from ? `Da: ${formattaIndirizzi(email.from)}` : null,
+    email.to?.length ? `A: ${formattaIndirizzi(email.to)}` : null,
+    email.cc?.length ? `Cc: ${formattaIndirizzi(email.cc)}` : null,
+    formattaData(email.date) ? `Data: ${formattaData(email.date)}` : null,
+    email.subject ? `Oggetto: ${email.subject}` : null,
+    allegati.length ? `Allegati (${allegati.length}): ${allegati.map((a) => a.nome).join(', ')}` : null,
+    saltati.length ? `(${saltati.length} immagini incorporate piccole — loghi o firme — non lette)` : null,
+  ];
+  return componiEmail(intestazione, corpo, await testoAllegati(allegati, profondita, onPaginaOcr));
+}
+
+function apriMsg(buffer: Buffer) {
+  const lettore = new MsgReader(buffer);
+  const dati = lettore.getFileData();
+  const allegati: AllegatoEmail[] = [];
+  for (const a of dati.attachments ?? []) {
+    try {
+      const estratto = lettore.getAttachment(a);
+      const nome = estratto.fileName || a.fileName || a.name || 'allegato senza nome';
+      const contenuto = Buffer.from(estratto.content);
+      if (/^smime\.p7s$/i.test(nome)) continue;
+      if (a.attachmentHidden && (a.attachMimeTag ?? '').startsWith('image/') && contenuto.length < MIN_BYTE_IMMAGINE_INCORPORATA) continue;
+      allegati.push({ nome: a.innerMsgContent && !/\.msg$/i.test(nome) ? `${nome}.msg` : nome, contenuto, mime: a.attachMimeTag?.toLowerCase() });
+    } catch {
+      allegati.push({ nome: a.fileName || a.name || 'allegato senza nome', contenuto: Buffer.alloc(0) });
+    }
+  }
+  return { dati, allegati };
+}
+
+async function msgATesto(buffer: Buffer, profondita: number, onPaginaOcr?: OnPaginaOcr): Promise<string> {
+  const { dati, allegati } = apriMsg(buffer);
+  const destinatari = (dati.recipients ?? []).map((r) => (r.name && r.smtpAddress ? `${r.name} <${r.smtpAddress}>` : r.smtpAddress || r.email || r.name));
+  const corpo = dati.body?.trim() ? dati.body : dati.bodyHtml ? htmlATesto(dati.bodyHtml) : '';
+  const intestazione = [
+    dati.senderName || dati.senderEmail ? `Da: ${[dati.senderName, dati.senderSmtpAddress || dati.senderEmail ? `<${dati.senderSmtpAddress || dati.senderEmail}>` : null].filter(Boolean).join(' ')}` : null,
+    destinatari.length ? `A: ${destinatari.filter(Boolean).join(', ')}` : null,
+    formattaData(dati.clientSubmitTime || dati.messageDeliveryTime) ? `Data: ${formattaData(dati.clientSubmitTime || dati.messageDeliveryTime)}` : null,
+    dati.subject ? `Oggetto: ${dati.subject}` : null,
+    allegati.length ? `Allegati (${allegati.length}): ${allegati.map((a) => a.nome).join(', ')}` : null,
+  ];
+  return componiEmail(intestazione, corpo, await testoAllegati(allegati, profondita, onPaginaOcr));
+}
+
+async function estraiTestoDaBuffer(
+  buffer: Buffer,
+  estensione: string,
+  nomeFile: string,
+  onPaginaOcr?: OnPaginaOcr,
+  profondita = 0,
+): Promise<string> {
   const ext = estensione.toLowerCase();
 
   if (ext === 'pdf') {
@@ -139,21 +336,14 @@ async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile:
   if (ext === 'rtf') {
     return rtfATesto(buffer);
   }
-  if (ext === 'txt' || ext === 'eml') {
+  if (ext === 'txt') {
     return buffer.toString('utf-8');
   }
+  if (ext === 'eml') {
+    return emlATesto(buffer, profondita, onPaginaOcr);
+  }
   if (ext === 'msg') {
-    const dati = new MsgReader(buffer).getFileData();
-    const allegati = dati.attachments?.map((a) => a.fileName).filter(Boolean).join(', ');
-    const intestazione = [
-      dati.senderName ? `Da: ${dati.senderName}` : null,
-      dati.recipients?.length ? `A: ${dati.recipients.map((r) => r.name).join(', ')}` : null,
-      dati.subject ? `Oggetto: ${dati.subject}` : null,
-      allegati ? `Allegati: ${allegati}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    return [intestazione, '', dati.body ?? ''].join('\n');
+    return msgATesto(buffer, profondita, onPaginaOcr);
   }
   if (ESTENSIONI_IMMAGINE.has(ext)) {
     const testo = await ocrImmagine(buffer);
@@ -164,11 +354,16 @@ async function estraiTestoDaBuffer(buffer: Buffer, estensione: string, nomeFile:
     // Convenzione italiana: "Decreto ingiuntivo.pdf.p7m" — l'estensione prima
     // di .p7m dice come interpretare il contenuto firmato appena estratto.
     const nomeInterno = nomeFile.replace(/\.p7m$/i, '');
-    const estensioneInterna = extname(nomeInterno).slice(1).toLowerCase();
+    let estensioneInterna = extname(nomeInterno).slice(1).toLowerCase();
+    // Email firmata S/MIME (smime.p7m dentro un .eml): il contenuto è a sua
+    // volta un messaggio MIME, senza estensione nel nome.
+    if (!ESTENSIONI_LEGGIBILI.has(estensioneInterna) && /^(?:[\w-]+:[^\r\n]*\r?\n)*content-type:/i.test(estratto.subarray(0, 4000).toString('latin1'))) {
+      estensioneInterna = 'eml';
+    }
     if (!estensioneInterna || !ESTENSIONI_LEGGIBILI.has(estensioneInterna) || estensioneInterna === 'p7m') {
       return '(Contenuto firmato estratto correttamente, ma il formato del documento originale non è tra quelli leggibili automaticamente.)';
     }
-    return estraiTestoDaBuffer(estratto, estensioneInterna, nomeInterno, onPaginaOcr);
+    return estraiTestoDaBuffer(estratto, estensioneInterna, nomeInterno, onPaginaOcr, profondita);
   }
   throw new Error(`Il formato ${ext.toUpperCase()} non è ancora leggibile automaticamente.`);
 }
@@ -210,3 +405,41 @@ export async function estraiTesto(
   return estraiTestoDaBuffer(buffer, ext, doc.nome, onPaginaOcr);
 }
 
+
+// --- Immagini da guardare ------------------------------------------------------
+
+export interface ImmagineDocumento {
+  /** Nome con cui l'immagine si chiede a guarda_immagini: per gli allegati
+   *  annidati il percorso dentro le email ("Originale.eml › IMG_1.jpg"). */
+  nome: string;
+  contenuto: Buffer;
+}
+
+// Le immagini di un documento della pratica, per mostrarle al modello come
+// immagini vere e non solo come testo OCR: il file stesso se è una foto,
+// altrimenti le foto allegate a un'email (anche dentro email inoltrate o
+// PEC). Loghi e firme incorporati restano esclusi come per il testo.
+export async function immaginiDelDocumento(doc: DocumentoRif & { percorso: string }): Promise<ImmagineDocumento[]> {
+  const ext = extname(doc.nome).slice(1).toLowerCase();
+  if (ESTENSIONI_IMMAGINE.has(ext)) return [{ nome: doc.nome, contenuto: await fs.readFile(doc.percorso) }];
+  if (ext !== 'eml' && ext !== 'msg') return [];
+  return immaginiEmail(await fs.readFile(doc.percorso), ext, '', 0);
+}
+
+async function immaginiEmail(buffer: Buffer, ext: 'eml' | 'msg', prefisso: string, profondita: number): Promise<ImmagineDocumento[]> {
+  const allegati = ext === 'eml' ? (await apriEml(buffer)).allegati : apriMsg(buffer).allegati;
+  const immagini: ImmagineDocumento[] = [];
+  for (const a of allegati) {
+    const tipo = estensioneAllegato(a);
+    if (ESTENSIONI_IMMAGINE.has(tipo) && a.contenuto.length > 0) {
+      immagini.push({ nome: prefisso + a.nome, contenuto: a.contenuto });
+    } else if ((tipo === 'eml' || tipo === 'msg') && profondita < MAX_PROFONDITA_EMAIL) {
+      try {
+        immagini.push(...(await immaginiEmail(a.contenuto, tipo, `${prefisso}${a.nome} › `, profondita + 1)));
+      } catch {
+        // Un'email annidata illeggibile non deve togliere le altre foto.
+      }
+    }
+  }
+  return immagini;
+}

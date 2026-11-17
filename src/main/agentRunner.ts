@@ -30,7 +30,10 @@ conversazioni non devono rileggerli. Salva lì anche i fatti stabili della prati
 l'avvocato li precisa. Nelle domande successive della stessa conversazione non rileggere quello che hai già
 letto: per verificare un punto preciso usa cerca_nei_documenti (più termini in una sola chiamata) o
 leggi_documento con l'intervallo di pagine. Per cronologie, scadenze e sequenze di fatti parti da
-estrai_date e verifica sul testo solo i passaggi che contano. Se un documento non si riesce a
+estrai_date e verifica sul testo solo i passaggi che contano. Le foto (file immagine o allegati delle email)
+nel testo compaiono solo con l'eventuale testo riconosciuto: quando ciò che mostrano conta per la domanda
+(luoghi, danni, lesioni, mezzi, persone, documenti fotografati) guardale con guarda_immagini, più foto nella
+stessa chiamata, e descrivi solo ciò che si vede davvero, senza supporre ciò che non è visibile. Se un documento non si riesce a
 leggere, dillo alla fine della risposta indicandolo per nome. Ogni affermazione sui fatti porta la fonte: nome
 del documento e, per i PDF, il numero di pagina (il testo estratto riporta "[Pagina N]" prima di ogni pagina).
 Se un documento citato dall'avvocato non risulta tra quelli disponibili, dillo esplicitamente e chiedi
@@ -119,6 +122,7 @@ export type EventoAgente =
 // mai in chiaro all'avvocato, solo questa frase in italiano.
 function attivitaPerStrumento(nomeStrumento: string): string {
   if (nomeStrumento.endsWith('__leggi_documento')) return 'Sto leggendo un documento della pratica…';
+  if (nomeStrumento.endsWith('__guarda_immagini')) return 'Sto guardando le foto della pratica…';
   if (nomeStrumento.endsWith('__elenca_documenti')) return 'Sto guardando i documenti della pratica…';
   if (nomeStrumento.endsWith('__cerca_nei_documenti')) return 'Sto cercando nei documenti della pratica…';
   if (nomeStrumento.endsWith('__estrai_date')) return 'Sto ricostruendo le date della pratica…';
@@ -198,6 +202,7 @@ async function opzioniBase(
     allowedTools: [
       'mcp__jarai-documenti__elenca_documenti',
       'mcp__jarai-documenti__leggi_documento',
+      'mcp__jarai-documenti__guarda_immagini',
       'mcp__jarai-documenti__cerca_nei_documenti',
       'mcp__jarai-documenti__estrai_date',
       'mcp__jarai-documenti__leggi_memoria_pratica',

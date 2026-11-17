@@ -44,9 +44,17 @@ export function indicizzabile(doc: DocumentoRif): doc is DocumentoRif & { percor
   return Boolean(doc.percorso) && ESTENSIONI_LEGGIBILI.has(estensione(doc));
 }
 
+// Versione dell'estrattore per formato: quando cambia il modo di leggere un
+// formato, i testi già in cache per quel formato vanno rifatti. Le email
+// (v2) prima erano lette come testo grezzo, con gli allegati in base64.
+const VERSIONE_ESTRATTORE: Record<string, number> = { eml: 2, msg: 2 };
+
 async function chiavePer(percorso: string): Promise<string> {
   const stat = await fs.stat(percorso);
-  return createHash('sha1').update(`${percorso}|${stat.size}|${stat.mtimeMs}`).digest('hex');
+  const versione = VERSIONE_ESTRATTORE[extname(percorso).slice(1).toLowerCase()];
+  return createHash('sha1')
+    .update(`${percorso}|${stat.size}|${stat.mtimeMs}${versione ? `|v${versione}` : ''}`)
+    .digest('hex');
 }
 
 async function leggiDallaCache(chiave: string): Promise<string | null> {

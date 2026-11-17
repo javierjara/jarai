@@ -1,9 +1,10 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
+import { nativeImage } from 'electron';
 import { z } from 'zod';
 import { extname } from 'node:path';
 import { ESTENSIONI_AUDIO } from './formatiDocumenti';
 import type { AvanzamentoTrascrizione } from './trascrizione';
-import type { DocumentoRif } from './estrazioneTesto';
+import { immaginiDelDocumento, type DocumentoRif } from './estrazioneTesto';
 import {
   cercaInTesto,
   dividiInParti,
@@ -40,6 +41,31 @@ export interface LavoroDocumento {
   iniziatoIl?: number;
   pagina?: number;
   pagineTotali?: number;
+}
+
+// Foto mostrate al modello come immagini (guarda_immagini). Lato lungo
+// massimo consigliato per i modelli Claude: oltre viene comunque ridotto, e
+// una foto di telefono a piena risoluzione peserebbe megabyte inutili.
+const LATO_MASSIMO_IMMAGINE = 1568;
+const IMMAGINI_PER_CHIAMATA = 8;
+// Se il sistema non sa decodificare l'immagine (per esempio WebP o GIF su
+// Windows) la si manda così com'è, purché resti sotto il limite dell'API.
+const MAX_BYTE_IMMAGINE_ORIGINALE = 3_500_000;
+const MIME_ORIGINALE: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+
+function immaginePerIlModello(nome: string, contenuto: Buffer): { data: string; mimeType: string } | null {
+  const img = nativeImage.createFromBuffer(contenuto);
+  if (!img.isEmpty()) {
+    const { width, height } = img.getSize();
+    const ridotta =
+      Math.max(width, height) <= LATO_MASSIMO_IMMAGINE
+        ? img
+        : img.resize(width >= height ? { width: LATO_MASSIMO_IMMAGINE, quality: 'good' } : { height: LATO_MASSIMO_IMMAGINE, quality: 'good' });
+    return { data: ridotta.toJPEG(82).toString('base64'), mimeType: 'image/jpeg' };
+  }
+  const mime = MIME_ORIGINALE[extname(nome).slice(1).toLowerCase()];
+  if (mime && contenuto.length <= MAX_BYTE_IMMAGINE_ORIGINALE) return { data: contenuto.toString('base64'), mimeType: mime };
+  return null;
 }
 
 // Dedup delle letture ripetute nella stessa conversazione (come in legis),
@@ -243,6 +269,72 @@ export function creaServerDocumenti(
     },
   );
 
+  const guardaImmagini = tool(
+    'guarda_immagini',
+    `Mostra come immagini vere le foto di un documento della pratica: un file immagine, oppure le foto allegate a un'email (.eml/.msg, comprese quelle dentro email inoltrate o PEC). leggi_documento per le foto restituisce solo il testo riconosciuto con l'OCR: usa questo strumento quando conta ciò che la foto mostra (luoghi, danni, lesioni, veicoli, animali, persone, documenti fotografati male). Ogni immagine costa circa 1.500-2.500 token: guarda solo quelle utili alla domanda. Al massimo ${IMMAGINI_PER_CHIAMATA} immagini per chiamata.`,
+    {
+      nome: z.string().describe('Nome esatto del documento (file immagine o email), come mostrato da elenca_documenti'),
+      immagini: z
+        .array(z.string())
+        .max(IMMAGINI_PER_CHIAMATA)
+        .optional()
+        .describe(`Solo per le email: i nomi delle foto da guardare, come elencati nella risposta precedente o negli "[Allegato …]" del testo dell'email. Se omesso, le prime ${IMMAGINI_PER_CHIAMATA}.`),
+      rileggi: z.boolean().optional().describe('true per riguardare una foto già vista in questa conversazione, se non è più disponibile'),
+    },
+    async ({ nome, immagini: richieste, rileggi = false }) => {
+      const doc = documenti.find((d) => d.nome === nome);
+      if (!doc?.percorso) {
+        return {
+          content: [{ type: 'text' as const, text: `Nessun documento leggibile chiamato "${nome}" in questa pratica. Usa elenca_documenti per vedere i nomi esatti.` }],
+          isError: true,
+        };
+      }
+      const percorso = doc.percorso;
+      let tutte;
+      try {
+        tutte = await immaginiDelDocumento({ ...doc, percorso });
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: err instanceof Error ? err.message : String(err) }], isError: true };
+      }
+      if (tutte.length === 0) {
+        return { content: [{ type: 'text' as const, text: `"${nome}" non contiene foto da guardare.` }], isError: true };
+      }
+      // Confronto tollerante sul nome: il modello può citare solo la parte
+      // finale ("IMG_5615.JPG") di un allegato annidato.
+      const corrisponde = (immagine: string, cercata: string) =>
+        immagine.toLowerCase() === cercata.toLowerCase() || immagine.toLowerCase().endsWith(` › ${cercata.toLowerCase()}`);
+      const scelte = richieste?.length ? tutte.filter((i) => richieste.some((r) => corrisponde(i.nome, r))) : tutte.slice(0, IMMAGINI_PER_CHIAMATA);
+      const nonTrovate = (richieste ?? []).filter((r) => !tutte.some((i) => corrisponde(i.nome, r)));
+      const contenuto: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[] = [];
+      const giaViste: string[] = [];
+      const illeggibili: string[] = [];
+      for (const immagine of scelte) {
+        const chiave = `${percorso}#img:${immagine.nome}`;
+        if (letti.has(chiave) && !rileggi) {
+          giaViste.push(immagine.nome);
+          continue;
+        }
+        const pronta = immaginePerIlModello(immagine.nome, immagine.contenuto);
+        if (!pronta) {
+          illeggibili.push(immagine.nome);
+          continue;
+        }
+        letti.add(chiave);
+        contenuto.push({ type: 'text', text: `[${nome} — ${immagine.nome}]` }, { type: 'image', ...pronta });
+      }
+      const altre = richieste?.length ? [] : tutte.slice(IMMAGINI_PER_CHIAMATA).map((i) => i.nome);
+      const note = [
+        `${tutte.length} foto in "${nome}": ${tutte.map((i) => i.nome).join(', ')}.`,
+        giaViste.length ? `Già viste in questa conversazione (richiama con rileggi: true se non sono più disponibili): ${giaViste.join(', ')}.` : null,
+        illeggibili.length ? `Formato immagine non visualizzabile: ${illeggibili.join(', ')}.` : null,
+        nonTrovate.length ? `Non trovate: ${nonTrovate.join(', ')}.` : null,
+        altre.length ? `Non mostrate in questa chiamata: ${altre.join(', ')} — richiamale con \`immagini\`.` : null,
+      ].filter(Boolean);
+      contenuto.unshift({ type: 'text', text: note.join('\n') });
+      return { content: contenuto, isError: scelte.length === 0 && nonTrovate.length > 0 };
+    },
+  );
+
   const cercaNeiDocumenti = tool(
     'cerca_nei_documenti',
     'Cerca una o più parole o frasi esatte in tutti i documenti della pratica (maiuscole e accenti ignorati) e restituisce i brani in cui compaiono, con documento e pagina. Passa più termini nella stessa chiamata invece di fare più ricerche. Utile per ritrovare nomi, date, importi o clausole. Non sostituisce la lettura: serve a verificare e ritrovare.',
@@ -408,6 +500,7 @@ export function creaServerDocumenti(
     tools: [
       elencaDocumenti,
       leggiDocumento,
+      guardaImmagini,
       cercaNeiDocumenti,
       estraiDate,
       ...(praticaId ? [leggiMemoriaPratica, salvaInMemoriaPratica] : []),
